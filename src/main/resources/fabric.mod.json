@@ -16,7 +16,7 @@
 	"environment": "*",
 	"entrypoints": {
 		"main": [
-			"com.mobileminerfarm.MobileMiner"
+			"com.mobileminer.MobileMiner"
 		]
 	},
 	"mixins": [
