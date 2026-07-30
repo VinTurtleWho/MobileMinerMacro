@@ -1,6 +1,6 @@
 package com.mobileminer;
 
-import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.message.v1.ClientSendMessageEvents;
 import net.minecraft.client.Minecraft;
@@ -9,12 +9,12 @@ import org.lwjgl.glfw.GLFW;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 
-public class MobileMiner implements ClientModInitializer {
+public class MobileMiner implements ModInitializer {
     private boolean oKeyPressed = false;
     private long windowPointer = -1;
 
     @Override
-    public void onInitializeClient() {
+    public void onInitialize() {
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             if (client.player == null) return;
             
