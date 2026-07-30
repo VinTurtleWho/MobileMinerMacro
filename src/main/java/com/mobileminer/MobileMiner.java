@@ -2,30 +2,34 @@ package com.mobileminer;
 
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.fabricmc.fabric.api.client.message.v1.ClientSendMessageEvents;
-import net.minecraft.client.KeyMapping;
-import com.mojang.blaze3d.platform.InputConstants;
+import net.minecraft.client.Minecraft;
 import org.lwjgl.glfw.GLFW;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+
 public class MobileMiner implements ClientModInitializer {
-    private static KeyMapping toggleKey;
+    private boolean oKeyPressed = false;
+    private long windowPointer = -1;
 
     @Override
     public void onInitializeClient() {
-        // Register the key natively so it shows up in Esc -> Controls
-        toggleKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
-            "Toggle MobileMiner",
-            InputConstants.Type.KEYSYM,
-            GLFW.GLFW_KEY_O,
-            "category.mobileminer.general"
-        ));
-
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             if (client.player == null) return;
             
-            while (toggleKey.consumeClick()) {
-                MiningMacro.getInstance().toggle(client);
+            // Fetch the window pointer safely using reflection
+            if (windowPointer == -1) {
+                windowPointer = getWindowPointer(client);
+            }
+
+            // Check the 'O' key natively via GLFW
+            if (windowPointer != -1) {
+                boolean isOKeyDown = GLFW.glfwGetKey(windowPointer, GLFW.GLFW_KEY_O) == GLFW.GLFW_PRESS;
+                if (isOKeyDown && !oKeyPressed) {
+                    MiningMacro.getInstance().toggle(client);
+                }
+                oKeyPressed = isOKeyDown;
             }
 
             MiningMacro.getInstance().onTick(client);
@@ -38,6 +42,30 @@ public class MobileMiner implements ClientModInitializer {
             }
             return true;
         });
+    }
+
+    private long getWindowPointer(Minecraft client) {
+        Object window = client.getWindow();
+        try {
+            // Try standard Mojmap (getWindow)
+            Method m = window.getClass().getMethod("getWindow");
+            return (long) m.invoke(window);
+        } catch (Exception e1) {
+            try {
+                // Try Fabric Yarn (getHandle)
+                Method m = window.getClass().getMethod("getHandle");
+                return (long) m.invoke(window);
+            } catch (Exception e2) {
+                try {
+                    // Try raw field access as a last resort
+                    Field f = window.getClass().getDeclaredField("window");
+                    f.setAccessible(true);
+                    return f.getLong(window);
+                } catch (Exception e3) {
+                    return -1; // Failsafe
+                }
+            }
+        }
     }
 
     private void handleCommand(String message) {
