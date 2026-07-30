@@ -2,23 +2,31 @@ package com.mobileminer;
 
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.fabricmc.fabric.api.client.message.v1.ClientSendMessageEvents;
-import net.minecraft.client.Minecraft;
+import net.minecraft.client.KeyMapping;
+import com.mojang.blaze3d.platform.InputConstants;
 import org.lwjgl.glfw.GLFW;
 
 public class MobileMiner implements ClientModInitializer {
-    private boolean oKeyPressed = false;
+    private static KeyMapping toggleKey;
 
     @Override
     public void onInitializeClient() {
+        // Register the key natively so it shows up in Esc -> Controls
+        toggleKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
+            "Toggle MobileMiner",
+            InputConstants.Type.KEYSYM,
+            GLFW.GLFW_KEY_O,
+            "category.mobileminer.general"
+        ));
+
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             if (client.player == null) return;
             
-            boolean isOKeyDown = GLFW.glfwGetKey(client.getWindow().getWindow(), GLFW.GLFW_KEY_O) == GLFW.GLFW_PRESS;
-            if (isOKeyDown && !oKeyPressed) {
+            while (toggleKey.consumeClick()) {
                 MiningMacro.getInstance().toggle(client);
             }
-            oKeyPressed = isOKeyDown;
 
             MiningMacro.getInstance().onTick(client);
         });

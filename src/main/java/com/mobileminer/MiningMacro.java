@@ -56,7 +56,7 @@ public class MiningMacro {
 
     public void onTick(Minecraft client) {
         if (client.player == null) return;
-        rotationHandler.tick(client);
+        rotationHandler.updateRotation(client);
 
         if (state == MacroState.MINING) {
             handleMining(client);
@@ -79,7 +79,7 @@ public class MiningMacro {
             aimAt(client, targetX, targetY, targetZ);
 
             // Jiggle Tolerance: Start swinging if we are looking closely at it
-            if (rotationHandler.isFinished()) {
+            if (!rotationHandler.isRotating()) {
                 inputController.setPressed(client.options.keyAttack, true);
             }
         }
@@ -147,7 +147,7 @@ public class MiningMacro {
 
     private void sendMessage(Minecraft client, String text) {
         if (client.player != null) {
-            client.player.displayClientMessage(Component.literal(text), false);
+            client.player.sendSystemMessage(Component.literal(text));
         }
     }
 }
