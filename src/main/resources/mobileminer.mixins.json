@@ -1,6 +1,6 @@
 {
   "required": true,
-  "package": "com.mobilemacrofarm.mixin",
+  "package": "com.mobileminerfarm.mixin",
   "compatibilityLevel": "JAVA_25",
   "mixins": [],
   "injectors": {
