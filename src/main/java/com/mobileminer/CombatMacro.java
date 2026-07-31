@@ -1,12 +1,14 @@
 package com.mobileminer;
 
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.KeyMapping;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.phys.Vec3;
 
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
@@ -20,10 +22,11 @@ public class CombatMacro {
     private List<BlockPos> currentPath = null;
     private boolean calculatingPath = false;
 
-    // Combat Variables
-    private long lastClickTime = 0;
+    // Burst CPS Variables
     private long mobTargetTime = 0;
-    private int clickState = 0; // 0 = idle, 1 = pressed, 2 = released
+    private long nextClickTime = 0;
+    private long burstCooldownEndTime = 0;
+    private int burstClicksRemaining = 0;
     private final Random random = new Random();
 
     // Anti-Stuck Variables
@@ -50,13 +53,13 @@ public class CombatMacro {
     public void toggle(Minecraft client) {
         if (!isCombatActive) {
             isCombatActive = true;
-            sendMessage(client, "§c[MobileMiner] Combat Mode Activated. Hunting...");
+            sendMessage(client, "§c[MobileMiner] Combat Mode Activated. Sweaty Mode ON.");
         } else {
             isCombatActive = false;
             stopMovement(client);
             currentMob = null;
             currentPath = null;
-            clickState = 0;
+            burstClicksRemaining = 0;
             sendMessage(client, "§7[MobileMiner] Combat Mode Deactivated.");
         }
     }
@@ -64,27 +67,28 @@ public class CombatMacro {
     public void onTick(Minecraft client) {
         if (client.player == null || client.level == null || !isCombatActive) return;
 
-        // 1. Strict State-Machine Clicker (Fixes the perma-hold glitch)
-        if (clickState == 1) {
-            client.options.keyAttack.setDown(false); // Force release after 1 tick
-            clickState = 2; // Mark as safely released
-        }
-
-        // 2. Anti-Stuck Memory Check
+        // 1. Anti-Stuck Memory Check
         double moveDist = client.player.position().distanceToSqr(lastPlayerPos);
-        if (client.options.keyUp.isDown() && moveDist < 0.01) {
+        if (client.options.keyUp.isDown() && moveDist < 0.005) {
             stuckTicks++;
-            if (stuckTicks > 15) { // Stuck for nearly 1 second
-                client.options.keyJump.setDown(true); // Panic jump
-                currentPath = null; // Force recalculation
+            if (stuckTicks > 10) { 
+                client.options.keyJump.setDown(true); 
+                currentPath = null; 
                 stuckTicks = 0;
             }
         } else {
             stuckTicks = 0;
+            if (currentPath != null && !currentPath.isEmpty()) {
+                if (currentPath.get(0).getY() <= client.player.getY() && !client.player.horizontalCollision) {
+                    client.options.keyJump.setDown(false);
+                }
+            } else {
+                client.options.keyJump.setDown(false);
+            }
         }
         lastPlayerPos = client.player.position();
 
-        // 3. Find or validate target
+        // 2. Find or validate target
         if (currentMob == null || !isTargetValid(currentMob)) {
             if (currentMob != null) stopMovement(client); 
             
@@ -98,18 +102,20 @@ public class CombatMacro {
             return;
         }
 
-        double distance = client.player.distanceTo(currentMob);
+        // Apply Hologram Bypass
+        Entity actualTarget = getRealFleshEntity(client, currentMob);
+        double distance = client.player.distanceTo(actualTarget);
 
-        // 4. COMBAT BRAIN
-        if (distance <= 3.0) {
+        // 3. COMBAT BRAIN
+        if (distance <= 3.2) {
             stopMovement(client);
-            lookAtTorso(client, currentMob);
+            lookAtTorso(client, actualTarget);
             executeAdaptiveAttack(client);
             return;
         }
 
-        // 5. PATHFINDING BRAIN
-        BlockPos mobPos = currentMob.blockPosition();
+        // 4. PATHFINDING BRAIN
+        BlockPos mobPos = actualTarget.blockPosition();
         
         if (currentPath == null && !calculatingPath) {
             calculatingPath = true;
@@ -123,14 +129,13 @@ public class CombatMacro {
         if (currentPath != null && !currentPath.isEmpty()) {
             BlockPos nextWaypoint = currentPath.get(0);
             
-            // Increased drop radius to 1.5 to prevent edge-clipping
             if (client.player.blockPosition().closerThan(nextWaypoint, 1.5)) {
                 currentPath.remove(0);
                 return;
             }
             navigateToWaypoint(client, nextWaypoint);
         } else {
-            directChase(client, currentMob);
+            directChase(client, actualTarget);
         }
     }
 
@@ -146,10 +151,8 @@ public class CombatMacro {
         client.options.keyUp.setDown(true);
         client.options.keySprint.setDown(true);
 
-        if (waypoint.getY() > client.player.getY() && client.player.horizontalCollision) {
+        if ((waypoint.getY() > client.player.getY() || client.player.horizontalCollision) && stuckTicks == 0) {
             client.options.keyJump.setDown(true);
-        } else if (stuckTicks == 0) {
-            client.options.keyJump.setDown(false);
         }
     }
 
@@ -163,24 +166,54 @@ public class CombatMacro {
         client.options.keyUp.setDown(true);
         client.options.keySprint.setDown(true);
         
-        if (client.player.horizontalCollision) {
+        if (client.player.horizontalCollision && stuckTicks == 0) {
             client.options.keyJump.setDown(true);
-        } else if (stuckTicks == 0) {
-            client.options.keyJump.setDown(false);
         }
     }
 
+    // THE NATIVE BURST-CPS ENGINE
     private void executeAdaptiveAttack(Minecraft client) {
         long timeAlive = System.currentTimeMillis() - mobTargetTime;
         long currentTime = System.currentTimeMillis();
         boolean isBoss = timeAlive > 1000;
         
-        long clickDelay = isBoss ? (120 + random.nextInt(80)) : 400;
+        if (!isBoss) {
+            // Phase 1: Calm 1-Tap TriggerBot
+            if (currentTime >= nextClickTime) {
+                injectHardwareClick(client);
+                nextClickTime = currentTime + 350 + random.nextInt(100); // 350-450ms pacing
+            }
+        } else {
+            // Phase 2: Boss Mode Burst-Clicking (Jitter/Butterfly mimic)
+            if (burstClicksRemaining > 0) {
+                if (currentTime >= nextClickTime) {
+                    injectHardwareClick(client);
+                    burstClicksRemaining--;
+                    // Rapid clicking inside the burst (50ms - 85ms between clicks = 12-20 CPS natively)
+                    nextClickTime = currentTime + 50 + random.nextInt(36); 
+                }
+            } else if (currentTime >= burstCooldownEndTime) {
+                // Time to start a new sweaty burst!
+                burstClicksRemaining = 3 + random.nextInt(4); // 3 to 6 clicks in a row
+                // The fatigue pause between bursts (150ms - 250ms delay before clicking again)
+                burstCooldownEndTime = currentTime + 150 + random.nextInt(100);
+                nextClickTime = currentTime;
+            }
+        }
+    }
 
-        if (currentTime - lastClickTime >= clickDelay && clickState != 1) {
-            client.options.keyAttack.setDown(true);
-            clickState = 1; // Mark as pressed (will be released next tick)
-            lastClickTime = currentTime;
+    // Safely injects a native hardware click to the game's internal queue
+    private void injectHardwareClick(Minecraft client) {
+        try {
+            // Direct injection to the hardware queue (Watchdog cannot tell the difference between this and a real mouse)
+            KeyMapping.click(client.options.keyAttack.getKey());
+        } catch (Exception e) {
+            try {
+                // Failsafe: Use reflection to forcefully bump the game's internal clickCount integer if mappings mismatch
+                Field clickCountField = KeyMapping.class.getDeclaredField("clickCount");
+                clickCountField.setAccessible(true);
+                clickCountField.setInt(client.options.keyAttack, clickCountField.getInt(client.options.keyAttack) + 1);
+            } catch (Exception ex) {}
         }
     }
 
@@ -193,7 +226,6 @@ public class CombatMacro {
         float currentPitch = client.player.getXRot();
         float pitchDiff = targetPitch - currentPitch;
 
-        // GCD Math from Layer 1 for buttery human aim
         double sensitivity = client.options.sensitivity().get();
         float f = (float) (sensitivity * 0.6 + 0.2);
         float gcd = f * f * f * 8.0f;
@@ -210,19 +242,20 @@ public class CombatMacro {
         client.player.setXRot(currentPitch + ((float) mouseDeltaY * stepMult));
     }
 
-    // THE ARMOR STAND FIX
+    private Entity getRealFleshEntity(Minecraft client, Entity scannedEntity) {
+        if (scannedEntity.getClass().getSimpleName().contains("ArmorStand")) {
+            for (Entity e : client.level.getEntities(scannedEntity, scannedEntity.getBoundingBox().inflate(1.5))) {
+                if (e instanceof LivingEntity && !e.getClass().getSimpleName().contains("ArmorStand")) {
+                    return e; 
+                }
+            }
+        }
+        return scannedEntity;
+    }
+
     private void lookAtTorso(Minecraft client, Entity entity) {
         Vec3 eyes = client.player.getEyePosition();
-        
-        double torsoY = entity.getY();
-        
-        // Check if the entity is an invisible Armor Stand acting as a nametag
-        if (entity.getClass().getSimpleName().contains("ArmorStand")) {
-            torsoY -= 1.0; // Aim 1 block straight down to hit the actual zombie underneath
-        } else {
-            torsoY += (entity.getBbHeight() * 0.5); // Normal torso aim
-        }
-        
+        double torsoY = entity.getY() + (entity.getBbHeight() * 0.5); 
         Vec3 target = new Vec3(entity.getX(), torsoY, entity.getZ());
         
         double dx = target.x - eyes.x;
@@ -240,7 +273,7 @@ public class CombatMacro {
         client.options.keyUp.setDown(false);
         client.options.keyJump.setDown(false);
         client.options.keySprint.setDown(false);
-        if (clickState != 1) client.options.keyAttack.setDown(false);
+        client.options.keyAttack.setDown(false);
     }
 
     private Entity scanForClosestMob(Minecraft client, double range) {
@@ -263,9 +296,9 @@ public class CombatMacro {
     private boolean isTargetValid(Entity entity) {
         if (entity.isRemoved()) return false;
         
-        // Ignore dead entities
-        if (entity instanceof LivingEntity && (((LivingEntity) entity).getHealth() <= 0 || ((LivingEntity) entity).isDeadOrDying())) {
-            return false;
+        if (entity instanceof LivingEntity) {
+            LivingEntity living = (LivingEntity) entity;
+            if (living.getHealth() <= 0 || living.isDeadOrDying()) return false;
         }
         
         String name = entity.getName().getString().toLowerCase();
