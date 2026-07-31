@@ -6,6 +6,8 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.level.ClipContext;
 
 import java.lang.reflect.Field;
 import java.util.ArrayList;
@@ -45,10 +47,10 @@ public class MiningMacro {
             equipSlot(client, toolSlot);
             isMining = true;
             delayEndTime = 0;
-            sendMessage(client, "§a[MobileMiner] Layer 1 Activated. Sweaty Mode ON.");
+            sendMessage(client, "§a[MobileMiner] Layer 1 Activated. Humanized Mode ON.");
         } else {
             isMining = false;
-            client.options.keyAttack.setDown(false); // Finally let go of the mouse
+            client.options.keyAttack.setDown(false);
             currentTarget = null;
             delayEndTime = 0;
             sendMessage(client, "§c[MobileMiner] Stopped.");
@@ -57,43 +59,60 @@ public class MiningMacro {
 
     public void onTick(Minecraft client) {
         if (client.player == null) return;
-
-        if (isMining) {
-            handleMining(client);
-        }
+        if (isMining) handleMining(client);
     }
 
     private void handleMining(Minecraft client) {
-        // 1. Check if the block just broke or we need a new target
+        // 1. Check if the block broke or if we need a new target
         if (currentTarget == null || !isValidTarget(client, currentTarget)) {
             
-            // Start the Sweaty Ping Delay (50ms - 130ms)
+            // Start the Ping Delay (50ms - 130ms)
             if (delayEndTime == 0) {
                 delayEndTime = System.currentTimeMillis() + 50 + random.nextInt(81);
             }
             
-            // If we are still delayed, wait! (But DO NOT release left click)
-            if (System.currentTimeMillis() < delayEndTime) {
-                return; 
-            }
+            // Still delayed? Wait, but keep holding click!
+            if (System.currentTimeMillis() < delayEndTime) return;
             
-            // Delay is over, find the next block
+            // Delay over, scan for the next best block
             delayEndTime = 0; 
-            currentTarget = scanForClosestBlock(client, 4);
+            currentTarget = scanForBestBlock(client, 4);
             
             if (currentTarget == null) {
-                // Vein is wiped clean. Release the Death Grip.
+                // Completely out of ores. Let go of the mouse.
                 client.options.keyAttack.setDown(false);
                 return;
             }
         }
 
-        // 2. We have a target block!
+        // 2. We have a target!
         if (currentTarget != null) {
-            // THE DEATH GRIP: Clamp down on left click natively
+            // Clamp down on left click natively
             client.options.keyAttack.setDown(true);
 
-            // THE LAZY EDGE CHECK: Use Minecraft's native raytrace to see if our crosshair is touching the hitbox
+            // Calculate exact math to the center of the block
+            double targetX = currentTarget.getX() + 0.5;
+            double targetY = currentTarget.getY() + 0.5;
+            double targetZ = currentTarget.getZ() + 0.5;
+
+            double dx = targetX - client.player.getX();
+            double dy = targetY - client.player.getEyeY();
+            double dz = targetZ - client.player.getZ();
+            
+            double horizDist = Math.sqrt(dx * dx + dz * dz);
+            float targetYaw = (float) Math.toDegrees(Math.atan2(dz, dx)) - 90.0f;
+            float targetPitch = (float) -Math.toDegrees(Math.atan2(dy, horizDist));
+
+            float currentYaw = client.player.getYRot();
+            float currentPitch = client.player.getXRot();
+            
+            float yawDiff = targetYaw - currentYaw;
+            while (yawDiff < -180.0f) yawDiff += 360.0f;
+            while (yawDiff > 180.0f) yawDiff -= 360.0f;
+            
+            float pitchDiff = targetPitch - currentPitch;
+
+            // Check if we are touching the block
             boolean isLookingAtTarget = false;
             if (client.hitResult != null && client.hitResult.getType() == HitResult.Type.BLOCK) {
                 BlockHitResult blockHit = (BlockHitResult) client.hitResult;
@@ -102,56 +121,32 @@ public class MiningMacro {
                 }
             }
 
-            // If we are NOT touching the block yet, drag towards it smoothly.
-            // If we ARE touching it, the camera stops moving completely (Lazy Edge Stop).
-            if (!isLookingAtTarget) {
-                lazyDragToTarget(client, currentTarget);
+            // THE "GOLDEN RATIO" AIM FIX
+            // Only stop moving the camera if we are hitting the block AND we are safely inside the "meat" of it (within 8 degrees of center)
+            if (isLookingAtTarget && Math.abs(yawDiff) < 8.0f && Math.abs(pitchDiff) < 8.0f) {
+                return; // Stop dragging. Perfect aim achieved.
             }
+
+            // Smooth linear drag to the Golden Ratio
+            float speed = 0.22f; 
+            float stepYaw = yawDiff * speed;
+            float stepPitch = pitchDiff * speed;
+
+            // Watchdog GCD Math
+            double sensitivity = client.options.sensitivity().get();
+            float f = (float) (sensitivity * 0.6 + 0.2);
+            float gcd = f * f * f * 8.0f;
+            float stepMult = gcd * 0.15f;
+
+            int mouseDeltaX = Math.round(stepYaw / stepMult);
+            int mouseDeltaY = Math.round(stepPitch / stepMult);
+
+            if (mouseDeltaX == 0 && Math.abs(yawDiff) > stepMult) mouseDeltaX = (int) Math.signum(yawDiff);
+            if (mouseDeltaY == 0 && Math.abs(pitchDiff) > stepMult) mouseDeltaY = (int) Math.signum(pitchDiff);
+
+            client.player.setYRot(currentYaw + ((float) mouseDeltaX * stepMult));
+            client.player.setXRot(currentPitch + ((float) mouseDeltaY * stepMult));
         }
-    }
-
-    private void lazyDragToTarget(Minecraft client, BlockPos target) {
-        double targetX = target.getX() + 0.5;
-        double targetY = target.getY() + 0.5;
-        double targetZ = target.getZ() + 0.5;
-
-        double dx = targetX - client.player.getX();
-        double dy = targetY - client.player.getEyeY();
-        double dz = targetZ - client.player.getZ();
-        
-        double horizDist = Math.sqrt(dx * dx + dz * dz);
-        float targetYaw = (float) Math.toDegrees(Math.atan2(dz, dx)) - 90.0f;
-        float targetPitch = (float) -Math.toDegrees(Math.atan2(dy, horizDist));
-
-        float currentYaw = client.player.getYRot();
-        float currentPitch = client.player.getXRot();
-        
-        float yawDiff = targetYaw - currentYaw;
-        while (yawDiff < -180.0f) yawDiff += 360.0f;
-        while (yawDiff > 180.0f) yawDiff -= 360.0f;
-        
-        float pitchDiff = targetPitch - currentPitch;
-
-        // Smooth Linear Drag (No bouncy spring physics)
-        float speed = 0.25f; // Drag speed multiplier - smooth and lazy
-        float stepYaw = yawDiff * speed;
-        float stepPitch = pitchDiff * speed;
-
-        // Strict GCD Quantization to bypass Watchdog
-        double sensitivity = client.options.sensitivity().get();
-        float f = (float) (sensitivity * 0.6 + 0.2);
-        float gcd = f * f * f * 8.0f;
-        float stepMult = gcd * 0.15f;
-
-        int mouseDeltaX = Math.round(stepYaw / stepMult);
-        int mouseDeltaY = Math.round(stepPitch / stepMult);
-
-        // Failsafe: Force a 1-pixel move if we are stalling out before hitting the edge
-        if (mouseDeltaX == 0 && Math.abs(yawDiff) > stepMult) mouseDeltaX = (int) Math.signum(yawDiff);
-        if (mouseDeltaY == 0 && Math.abs(pitchDiff) > stepMult) mouseDeltaY = (int) Math.signum(pitchDiff);
-
-        client.player.setYRot(currentYaw + ((float) mouseDeltaX * stepMult));
-        client.player.setXRot(currentPitch + ((float) mouseDeltaY * stepMult));
     }
 
     private boolean isValidTarget(Minecraft client, BlockPos pos) {
@@ -162,26 +157,42 @@ public class MiningMacro {
         return false;
     }
 
-    private BlockPos scanForClosestBlock(Minecraft client, int radius) {
+    // THE LINE OF SIGHT CHECK
+    private boolean hasLineOfSight(Minecraft client, BlockPos pos) {
+        Vec3 eyePos = new Vec3(client.player.getX(), client.player.getEyeY(), client.player.getZ());
+        Vec3 blockCenter = new Vec3(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
+        ClipContext context = new ClipContext(eyePos, blockCenter, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, client.player);
+        BlockHitResult result = client.level.clip(context);
+        return result.getType() == HitResult.Type.MISS || result.getBlockPos().equals(pos);
+    }
+
+    private BlockPos scanForBestBlock(Minecraft client, int radius) {
         BlockPos playerPos = client.player.blockPosition();
-        BlockPos closestPos = null;
-        double closestDist = Double.MAX_VALUE;
+        BlockPos bestPos = null;
+        double bestScore = Double.MAX_VALUE;
 
         for (int x = -radius; x <= radius; x++) {
             for (int y = -radius; y <= radius; y++) {
                 for (int z = -radius; z <= radius; z++) {
                     BlockPos pos = playerPos.offset(x, y, z);
-                    if (isValidTarget(client, pos)) {
+                    
+                    if (isValidTarget(client, pos) && hasLineOfSight(client, pos)) {
                         double dist = client.player.distanceToSqr(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
-                        if (dist < closestDist) {
-                            closestDist = dist;
-                            closestPos = pos;
+                        
+                        // THE FOOT-FETISH FIX: Add a massive penalty to blocks below the waist
+                        if (pos.getY() < client.player.getY()) {
+                            dist += 20.0; // Pushes lower blocks to the bottom of the priority list
+                        }
+
+                        if (dist < bestScore) {
+                            bestScore = dist;
+                            bestPos = pos;
                         }
                     }
                 }
             }
         }
-        return closestPos;
+        return bestPos;
     }
 
     public void setToolSlot(int slot) { this.toolSlot = slot; }
@@ -193,13 +204,7 @@ public class MiningMacro {
             Field selectedField = Inventory.class.getDeclaredField("selected");
             selectedField.setAccessible(true);
             selectedField.setInt(inv, slot);
-        } catch (Exception e) {
-            try {
-                Field obfuscatedField = Inventory.class.getDeclaredField("field_7545");
-                obfuscatedField.setAccessible(true);
-                obfuscatedField.setInt(inv, slot);
-            } catch (Exception ex) {}
-        }
+        } catch (Exception e) {}
     }
 
     private void sendMessage(Minecraft client, String text) {
