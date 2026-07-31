@@ -13,7 +13,6 @@ public class MobileMiner implements ModInitializer {
     private boolean oKeyPressed = false;
     private long windowPointer = -1;
     
-    // THE SWITCHBOARD: Defaults to mining
     public static String currentMode = "mining"; 
 
     @Override
@@ -33,11 +32,11 @@ public class MobileMiner implements ModInitializer {
                 oKeyPressed = isOKeyDown;
             }
 
-            // Route the tick to the correct brain
+            // Route the tick to the active module
             if (currentMode.equals("mining")) {
                 MiningMacro.getInstance().onTick(client);
             } else if (currentMode.equals("combat")) {
-                // CombatMacro.getInstance().onTick(client); // We will uncomment this when we build Layer 2!
+                CombatMacro.getInstance().onTick(client);
             }
         });
 
@@ -54,8 +53,7 @@ public class MobileMiner implements ModInitializer {
         if (currentMode.equals("mining")) {
             MiningMacro.getInstance().toggle(client);
         } else if (currentMode.equals("combat")) {
-            // CombatMacro.getInstance().toggle(client);
-            sendMessage(client, "§e[MobileMiner] Combat Mode toggle recognized! (Coming soon)");
+            CombatMacro.getInstance().toggle(client);
         }
     }
 
@@ -84,7 +82,6 @@ public class MobileMiner implements ModInitializer {
         if (parts.length >= 2) {
             String cmd = parts[1].toLowerCase();
             
-            // THE NEW MODE COMMAND
             if (cmd.equals("mode") && parts.length >= 3) {
                 String newMode = parts[2].toLowerCase();
                 if (newMode.equals("mining") || newMode.equals("combat")) {
@@ -99,12 +96,13 @@ public class MobileMiner implements ModInitializer {
                 sendMessage(client, "§a[MobileMiner] Added block: " + parts[2]);
             } 
             else if (cmd.equals("addmob") && parts.length >= 3) {
-                // CombatMacro.getInstance().addTargetMob(parts[2].toLowerCase());
-                sendMessage(client, "§c[MobileMiner] Added mob: " + parts[2] + " (Stored for Layer 2)");
+                CombatMacro.getInstance().addTargetMob(parts[2].toLowerCase());
+                sendMessage(client, "§a[MobileMiner] Added mob target: " + parts[2]);
             }
             else if (cmd.equals("clear")) {
                 MiningMacro.getInstance().clearTargetBlocks();
-                sendMessage(client, "§e[MobileMiner] Cleared all memory.");
+                CombatMacro.getInstance().clearTargetMobs();
+                sendMessage(client, "§e[MobileMiner] Cleared all tracking memory.");
             } 
         }
     }
