@@ -25,14 +25,11 @@ public class CombatMacro {
     private boolean calculatingPath = false;
 
     // Burst CPS Variables
-    private long currentMobFirstHitTime = 0; // Fix 1: Boss timer only starts AFTER first hit
+    private long currentMobFirstHitTime = 0;
     private long nextClickTime = 0;
     private long burstCooldownEndTime = 0;
     private int burstClicksRemaining = 0;
     private final Random random = new Random();
-
-    // Corpse Bypass Blacklist (Entity ID -> Time Blacklisted)
-    private final Map<Integer, Long> deadEntityBlacklist = new HashMap<>();
 
     // Anti-Stuck Variables
     private Vec3 lastPlayerPos = Vec3.ZERO;
@@ -53,13 +50,12 @@ public class CombatMacro {
         targetMobs.clear();
         currentMob = null;
         currentPath = null;
-        deadEntityBlacklist.clear();
     }
 
     public void toggle(Minecraft client) {
         if (!isCombatActive) {
             isCombatActive = true;
-            sendMessage(client, "§c[MobileMiner] Combat Mode Activated. Blitzing targets...");
+            sendMessage(client, "§c[MobileMiner] Combat Mode Activated. Sweaty Mode ON.");
         } else {
             isCombatActive = false;
             stopMovement(client);
@@ -67,7 +63,6 @@ public class CombatMacro {
             currentPath = null;
             currentMobFirstHitTime = 0;
             burstClicksRemaining = 0;
-            deadEntityBlacklist.clear();
             sendMessage(client, "§7[MobileMiner] Combat Mode Deactivated.");
         }
     }
@@ -97,12 +92,12 @@ public class CombatMacro {
         lastPlayerPos = client.player.position();
 
         // 2. Find or validate target
-        if (currentMob == null || !isTargetValid(currentMob)) {
+        if (currentMob == null || !isTargetValid(currentMob, client)) {
             if (currentMob != null) stopMovement(client); 
             
             currentMob = scanForClosestMob(client, 30);
             currentPath = null;
-            currentMobFirstHitTime = 0; // RESET THE BOSS TIMER ON NEW MOB
+            currentMobFirstHitTime = 0; // Reset boss timer for new mob
         }
 
         if (currentMob == null) {
@@ -110,7 +105,13 @@ public class CombatMacro {
             return;
         }
 
+        // Get the real flesh entity to bypass holograms
         Entity actualTarget = getRealFleshEntity(client, currentMob);
+        if (actualTarget == null) {
+            currentMob = null; // Hologram is empty, drop it
+            return; 
+        }
+
         double distance = client.player.distanceTo(actualTarget);
 
         // 3. COMBAT BRAIN
@@ -121,7 +122,7 @@ public class CombatMacro {
             return;
         }
 
-        // 4. PATHFINDING & BLITZ CHASE BRAIN
+        // 4. PATHFINDING BRAIN
         BlockPos mobPos = actualTarget.blockPosition();
         
         if (currentPath == null && !calculatingPath) {
@@ -133,26 +134,43 @@ public class CombatMacro {
                 });
         }
 
-        // Fix 2: Blitz Chase. If math is still thinking, instantly directChase so we never stutter-step.
+        // Fix 1: Kill Blitz Chase. Just stare at the mob and wait for the math to finish to prevent spinning.
+        if (calculatingPath) {
+            lookAtTorso(client, actualTarget);
+            stopMovement(client);
+            return;
+        }
+
+        // Fix 2: Look-Ahead Smoothing
         if (currentPath != null && !currentPath.isEmpty()) {
             BlockPos nextWaypoint = currentPath.get(0);
             
-            if (client.player.blockPosition().closerThan(nextWaypoint, 1.5)) {
+            // Horizontal distance calculation (X and Z only)
+            double dx = nextWaypoint.getX() + 0.5 - client.player.getX();
+            double dz = nextWaypoint.getZ() + 0.5 - client.player.getZ();
+            double distSq = dx * dx + dz * dz;
+
+            // If we are within 1.5 blocks horizontally, we drop the waypoint early to curve the corner!
+            if (distSq < 2.25) { 
                 currentPath.remove(0);
-                return;
+                if (!currentPath.isEmpty()) {
+                    // Update our aim immediately to the next block in line
+                    nextWaypoint = currentPath.get(0);
+                    dx = nextWaypoint.getX() + 0.5 - client.player.getX();
+                    dz = nextWaypoint.getZ() + 0.5 - client.player.getZ();
+                } else {
+                    return;
+                }
             }
-            navigateToWaypoint(client, nextWaypoint);
+            
+            navigateToWaypoint(client, nextWaypoint, dx, dz);
         } else {
+            // Failsafe direct chase
             directChase(client, actualTarget);
         }
     }
 
-    private void navigateToWaypoint(Minecraft client, BlockPos waypoint) {
-        double targetX = waypoint.getX() + 0.5;
-        double targetZ = waypoint.getZ() + 0.5;
-        double dx = targetX - client.player.getX();
-        double dz = targetZ - client.player.getZ();
-
+    private void navigateToWaypoint(Minecraft client, BlockPos waypoint, double dx, double dz) {
         float targetYaw = (float) Math.toDegrees(Math.atan2(dz, dx)) - 90.0f;
         humanizedLookTowards(client, targetYaw, client.player.getXRot());
 
@@ -182,22 +200,19 @@ public class CombatMacro {
     private void executeAdaptiveAttack(Minecraft client) {
         long currentTime = System.currentTimeMillis();
         
-        // Start the boss timer the exact moment we take our first swing
         if (currentMobFirstHitTime == 0) {
             currentMobFirstHitTime = currentTime;
         }
 
         long timeSinceFirstHit = currentTime - currentMobFirstHitTime;
-        boolean isBoss = timeSinceFirstHit > 1000; // Only sweat if they tanked hits for a full second
+        boolean isBoss = timeSinceFirstHit > 1000; 
         
         if (!isBoss) {
-            // Phase 1: Calm 1-Tap / 2-Tap TriggerBot
             if (currentTime >= nextClickTime) {
                 injectHardwareClick(client);
                 nextClickTime = currentTime + 400 + random.nextInt(100); 
             }
         } else {
-            // Phase 2: Boss Mode Burst-Clicking
             if (burstClicksRemaining > 0) {
                 if (currentTime >= nextClickTime) {
                     injectHardwareClick(client);
@@ -212,7 +227,7 @@ public class CombatMacro {
         }
     }
 
-    // PURE REFLECTION HARDWARE CLICKER (Compiler-Proof)
+    // PURE REFLECTION HARDWARE CLICKER
     private void injectHardwareClick(Minecraft client) {
         try {
             Field clickCountField = KeyMapping.class.getDeclaredField("clickCount");
@@ -258,13 +273,18 @@ public class CombatMacro {
         client.player.setXRot(currentPitch + ((float) mouseDeltaY * stepMult));
     }
 
+    // Fix 3: No Flesh, No Target. Validates if a living mob actually exists under the nametag.
     private Entity getRealFleshEntity(Minecraft client, Entity scannedEntity) {
         if (scannedEntity.getClass().getSimpleName().contains("ArmorStand")) {
             for (Entity e : client.level.getEntities(scannedEntity, scannedEntity.getBoundingBox().inflate(1.5))) {
                 if (e instanceof LivingEntity && !e.getClass().getSimpleName().contains("ArmorStand")) {
-                    return e; 
+                    LivingEntity living = (LivingEntity) e;
+                    if (living.getHealth() > 0 && !living.isDeadOrDying() && living.deathTime == 0) {
+                        return e; // Found a living mob beneath the tag!
+                    }
                 }
             }
+            return null; // Empty hologram (the mob is dead), ignore it completely!
         }
         return scannedEntity;
     }
@@ -298,7 +318,7 @@ public class CombatMacro {
 
         for (Entity entity : client.level.entitiesForRendering()) {
             if (entity == client.player) continue;
-            if (isTargetValid(entity)) {
+            if (isTargetValid(entity, client)) {
                 double dist = client.player.distanceTo(entity);
                 if (dist < range && dist < minDistance) {
                     minDistance = dist;
@@ -309,28 +329,16 @@ public class CombatMacro {
         return closest;
     }
 
-    // Fix 3: Hit-and-Run Protocol (Blacklisting corpses instantly)
-    private boolean isTargetValid(Entity entity) {
+    private boolean isTargetValid(Entity entity, Minecraft client) {
         if (entity.isRemoved()) return false;
         
-        // Clean up or check the blacklist
-        int id = entity.getId();
-        if (deadEntityBlacklist.containsKey(id)) {
-            if (System.currentTimeMillis() - deadEntityBlacklist.get(id) > 3000) {
-                deadEntityBlacklist.remove(id); // Free up memory after 3 seconds
-            } else {
-                return false; // Target is blacklisted (dead but animating)
-            }
-        }
+        // Ensure there is actual living flesh behind this entity (filters out dead holograms instantly)
+        Entity flesh = getRealFleshEntity(client, entity);
+        if (flesh == null) return false;
         
-        if (entity instanceof LivingEntity) {
-            LivingEntity living = (LivingEntity) entity;
-            
-            // The millisecond it hits 0 HP or starts the death animation, blacklist it forever
-            if (living.getHealth() <= 0 || living.isDeadOrDying() || living.deathTime > 0) {
-                deadEntityBlacklist.put(id, System.currentTimeMillis());
-                return false;
-            }
+        if (flesh instanceof LivingEntity) {
+            LivingEntity living = (LivingEntity) flesh;
+            if (living.getHealth() <= 0 || living.isDeadOrDying() || living.deathTime > 0) return false;
         }
         
         String name = entity.getName().getString().toLowerCase();
