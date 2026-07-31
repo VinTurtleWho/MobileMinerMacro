@@ -1,28 +1,28 @@
 package com.mobileminer;
 
-import com.mobileminer.input.InputController;
-import com.mobileminer.rotation.RotationHandler;
-import com.mobileminer.state.MacroState;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
 
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Random;
 
 public class MiningMacro {
     private static MiningMacro instance;
-    private MacroState state = MacroState.IDLE;
+    private boolean isMining = false;
     
-    private final RotationHandler rotationHandler = new RotationHandler();
-    private final InputController inputController = new InputController();
-
     private int toolSlot = 0;
     private final List<String> targetBlocks = new ArrayList<>();
     private BlockPos currentTarget = null;
-    private int debugTimer = 0;
+    
+    // Humanization Variables
+    private long delayEndTime = 0;
+    private final Random random = new Random();
 
     private MiningMacro() {}
 
@@ -41,70 +41,117 @@ public class MiningMacro {
     }
 
     public void toggle(Minecraft client) {
-        if (state == MacroState.IDLE) {
+        if (!isMining) {
             equipSlot(client, toolSlot);
-            state = MacroState.MINING;
-            sendMessage(client, "§a[MobileMiner] Layer 1 Activated. Scanning...");
+            isMining = true;
+            delayEndTime = 0;
+            sendMessage(client, "§a[MobileMiner] Layer 1 Activated. Sweaty Mode ON.");
         } else {
-            state = MacroState.IDLE;
-            client.options.keyAttack.setDown(false); 
+            isMining = false;
+            client.options.keyAttack.setDown(false); // Finally let go of the mouse
             currentTarget = null;
+            delayEndTime = 0;
             sendMessage(client, "§c[MobileMiner] Stopped.");
         }
     }
 
     public void onTick(Minecraft client) {
         if (client.player == null) return;
-        rotationHandler.updateRotation(client);
 
-        if (state == MacroState.MINING) {
+        if (isMining) {
             handleMining(client);
         }
     }
 
     private void handleMining(Minecraft client) {
+        // 1. Check if the block just broke or we need a new target
         if (currentTarget == null || !isValidTarget(client, currentTarget)) {
-            client.options.keyAttack.setDown(false); // Stop swinging when block breaks
+            
+            // Start the Sweaty Ping Delay (50ms - 130ms)
+            if (delayEndTime == 0) {
+                delayEndTime = System.currentTimeMillis() + 50 + random.nextInt(81);
+            }
+            
+            // If we are still delayed, wait! (But DO NOT release left click)
+            if (System.currentTimeMillis() < delayEndTime) {
+                return; 
+            }
+            
+            // Delay is over, find the next block
+            delayEndTime = 0; 
             currentTarget = scanForClosestBlock(client, 4);
             
-            if (currentTarget != null) {
-                sendMessage(client, "§d[Debug] Locked onto block at: " + currentTarget.getX() + ", " + currentTarget.getY() + ", " + currentTarget.getZ());
+            if (currentTarget == null) {
+                // Vein is wiped clean. Release the Death Grip.
+                client.options.keyAttack.setDown(false);
+                return;
             }
         }
 
+        // 2. We have a target block!
         if (currentTarget != null) {
-            double targetX = currentTarget.getX() + 0.5;
-            double targetY = currentTarget.getY() + 0.5;
-            double targetZ = currentTarget.getZ() + 0.5;
+            // THE DEATH GRIP: Clamp down on left click natively
+            client.options.keyAttack.setDown(true);
 
-            double dx = targetX - client.player.getX();
-            double dy = targetY - client.player.getEyeY();
-            double dz = targetZ - client.player.getZ();
-            
-            double horizDist = Math.sqrt(dx * dx + dz * dz);
-            float targetYaw = (float) Math.toDegrees(Math.atan2(dz, dx)) - 90.0f;
-            float targetPitch = (float) -Math.toDegrees(Math.atan2(dy, horizDist));
-
-            rotationHandler.updateTarget(targetYaw, targetPitch);
-
-            // JIGGLE MATH: Check if crosshair is within 10 degrees of target
-            float currentYaw = client.player.getYRot();
-            float currentPitch = client.player.getXRot();
-            
-            float yawDiff = Math.abs(currentYaw - targetYaw) % 360.0f;
-            if (yawDiff > 180.0f) yawDiff = 360.0f - yawDiff;
-            float pitchDiff = Math.abs(currentPitch - targetPitch);
-
-            // If we are looking close enough, SWING!
-            if (yawDiff < 10.0f && pitchDiff < 10.0f) {
-                client.options.keyAttack.setDown(true); // Native left click hold
-                if (debugTimer++ % 20 == 0) {
-                    sendMessage(client, "§e[Debug] Crosshair aligned. Swinging pickaxe!");
+            // THE LAZY EDGE CHECK: Use Minecraft's native raytrace to see if our crosshair is touching the hitbox
+            boolean isLookingAtTarget = false;
+            if (client.hitResult != null && client.hitResult.getType() == HitResult.Type.BLOCK) {
+                BlockHitResult blockHit = (BlockHitResult) client.hitResult;
+                if (blockHit.getBlockPos().equals(currentTarget)) {
+                    isLookingAtTarget = true;
                 }
-            } else {
-                client.options.keyAttack.setDown(false); // Let go of click while turning
+            }
+
+            // If we are NOT touching the block yet, drag towards it smoothly.
+            // If we ARE touching it, the camera stops moving completely (Lazy Edge Stop).
+            if (!isLookingAtTarget) {
+                lazyDragToTarget(client, currentTarget);
             }
         }
+    }
+
+    private void lazyDragToTarget(Minecraft client, BlockPos target) {
+        double targetX = target.getX() + 0.5;
+        double targetY = target.getY() + 0.5;
+        double targetZ = target.getZ() + 0.5;
+
+        double dx = targetX - client.player.getX();
+        double dy = targetY - client.player.getEyeY();
+        double dz = targetZ - client.player.getZ();
+        
+        double horizDist = Math.sqrt(dx * dx + dz * dz);
+        float targetYaw = (float) Math.toDegrees(Math.atan2(dz, dx)) - 90.0f;
+        float targetPitch = (float) -Math.toDegrees(Math.atan2(dy, horizDist));
+
+        float currentYaw = client.player.getYRot();
+        float currentPitch = client.player.getXRot();
+        
+        float yawDiff = targetYaw - currentYaw;
+        while (yawDiff < -180.0f) yawDiff += 360.0f;
+        while (yawDiff > 180.0f) yawDiff -= 360.0f;
+        
+        float pitchDiff = targetPitch - currentPitch;
+
+        // Smooth Linear Drag (No bouncy spring physics)
+        float speed = 0.25f; // Drag speed multiplier - smooth and lazy
+        float stepYaw = yawDiff * speed;
+        float stepPitch = pitchDiff * speed;
+
+        // Strict GCD Quantization to bypass Watchdog
+        double sensitivity = client.options.sensitivity().get();
+        float f = (float) (sensitivity * 0.6 + 0.2);
+        float gcd = f * f * f * 8.0f;
+        float stepMult = gcd * 0.15f;
+
+        int mouseDeltaX = Math.round(stepYaw / stepMult);
+        int mouseDeltaY = Math.round(stepPitch / stepMult);
+
+        // Failsafe: Force a 1-pixel move if we are stalling out before hitting the edge
+        if (mouseDeltaX == 0 && Math.abs(yawDiff) > stepMult) mouseDeltaX = (int) Math.signum(yawDiff);
+        if (mouseDeltaY == 0 && Math.abs(pitchDiff) > stepMult) mouseDeltaY = (int) Math.signum(pitchDiff);
+
+        client.player.setYRot(currentYaw + ((float) mouseDeltaX * stepMult));
+        client.player.setXRot(currentPitch + ((float) mouseDeltaY * stepMult));
     }
 
     private boolean isValidTarget(Minecraft client, BlockPos pos) {
