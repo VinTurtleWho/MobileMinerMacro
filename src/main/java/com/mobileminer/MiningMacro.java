@@ -20,10 +20,9 @@ public class MiningMacro {
     private final InputController inputController = new InputController();
 
     private int toolSlot = 0;
-    
-    // Layer 1: Dynamic Block Memory
     private final List<String> targetBlocks = new ArrayList<>();
     private BlockPos currentTarget = null;
+    private int debugTimer = 0;
 
     private MiningMacro() {}
 
@@ -33,7 +32,7 @@ public class MiningMacro {
     }
 
     public void addTargetBlock(String blockName) {
-        targetBlocks.add(blockName);
+        targetBlocks.add(blockName.toLowerCase());
     }
 
     public void clearTargetBlocks() {
@@ -48,7 +47,8 @@ public class MiningMacro {
             sendMessage(client, "§a[MobileMiner] Layer 1 Activated. Scanning...");
         } else {
             state = MacroState.IDLE;
-            inputController.releaseAll(client);
+            inputController.setPressed(client.options.keyAttack, false);
+            client.options.keyAttack.setDown(false); // Native failsafe release
             currentTarget = null;
             sendMessage(client, "§c[MobileMiner] Stopped.");
         }
@@ -64,13 +64,19 @@ public class MiningMacro {
     }
 
     private void handleMining(Minecraft client) {
-        // 1. If we have no target, or the current target is broken, scan for a new one.
+        // 1. Scan for block
         if (currentTarget == null || !isValidTarget(client, currentTarget)) {
             inputController.setPressed(client.options.keyAttack, false);
-            currentTarget = scanForClosestBlock(client, 4); // 4 block radius
+            client.options.keyAttack.setDown(false);
+            
+            currentTarget = scanForClosestBlock(client, 4);
+            
+            if (currentTarget != null) {
+                sendMessage(client, "§d[Debug] Locked onto block at: " + currentTarget.getX() + ", " + currentTarget.getY() + ", " + currentTarget.getZ());
+            }
         }
 
-        // 2. If we found a valid block, aim and mine it
+        // 2. Aim and Mine
         if (currentTarget != null) {
             double targetX = currentTarget.getX() + 0.5;
             double targetY = currentTarget.getY() + 0.5;
@@ -78,15 +84,22 @@ public class MiningMacro {
 
             aimAt(client, targetX, targetY, targetZ);
 
-            // Jiggle Tolerance: Start swinging if we are looking closely at it
+            // Once the crosshair finishes snapping to the center, hold Left Click
             if (!rotationHandler.isRotating()) {
                 inputController.setPressed(client.options.keyAttack, true);
+                client.options.keyAttack.setDown(true); // Native failsafe press
+            }
+        } else {
+            // Only spam the chat once every 2 seconds
+            if (debugTimer++ % 40 == 0) {
+                sendMessage(client, "§c[Debug] Scanning, but no matching blocks found in radius.");
             }
         }
     }
 
     private boolean isValidTarget(Minecraft client, BlockPos pos) {
-        String blockName = client.level.getBlockState(pos).getBlock().toString().toLowerCase();
+        // More accurate block name reading for newer Minecraft versions
+        String blockName = client.level.getBlockState(pos).getBlock().getDescriptionId().toLowerCase();
         for (String target : targetBlocks) {
             if (blockName.contains(target)) return true;
         }
