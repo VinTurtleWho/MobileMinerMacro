@@ -47,8 +47,7 @@ public class MiningMacro {
             sendMessage(client, "§a[MobileMiner] Layer 1 Activated. Scanning...");
         } else {
             state = MacroState.IDLE;
-            inputController.setPressed(client.options.keyAttack, false);
-            client.options.keyAttack.setDown(false); // Native failsafe release
+            client.options.keyAttack.setDown(false); 
             currentTarget = null;
             sendMessage(client, "§c[MobileMiner] Stopped.");
         }
@@ -64,11 +63,8 @@ public class MiningMacro {
     }
 
     private void handleMining(Minecraft client) {
-        // 1. Scan for block
         if (currentTarget == null || !isValidTarget(client, currentTarget)) {
-            inputController.setPressed(client.options.keyAttack, false);
-            client.options.keyAttack.setDown(false);
-            
+            client.options.keyAttack.setDown(false); // Stop swinging when block breaks
             currentTarget = scanForClosestBlock(client, 4);
             
             if (currentTarget != null) {
@@ -76,29 +72,42 @@ public class MiningMacro {
             }
         }
 
-        // 2. Aim and Mine
         if (currentTarget != null) {
             double targetX = currentTarget.getX() + 0.5;
             double targetY = currentTarget.getY() + 0.5;
             double targetZ = currentTarget.getZ() + 0.5;
 
-            aimAt(client, targetX, targetY, targetZ);
+            double dx = targetX - client.player.getX();
+            double dy = targetY - client.player.getEyeY();
+            double dz = targetZ - client.player.getZ();
+            
+            double horizDist = Math.sqrt(dx * dx + dz * dz);
+            float targetYaw = (float) Math.toDegrees(Math.atan2(dz, dx)) - 90.0f;
+            float targetPitch = (float) -Math.toDegrees(Math.atan2(dy, horizDist));
 
-            // Once the crosshair finishes snapping to the center, hold Left Click
-            if (!rotationHandler.isRotating()) {
-                inputController.setPressed(client.options.keyAttack, true);
-                client.options.keyAttack.setDown(true); // Native failsafe press
-            }
-        } else {
-            // Only spam the chat once every 2 seconds
-            if (debugTimer++ % 40 == 0) {
-                sendMessage(client, "§c[Debug] Scanning, but no matching blocks found in radius.");
+            rotationHandler.updateTarget(targetYaw, targetPitch);
+
+            // JIGGLE MATH: Check if crosshair is within 10 degrees of target
+            float currentYaw = client.player.getYRot();
+            float currentPitch = client.player.getXRot();
+            
+            float yawDiff = Math.abs(currentYaw - targetYaw) % 360.0f;
+            if (yawDiff > 180.0f) yawDiff = 360.0f - yawDiff;
+            float pitchDiff = Math.abs(currentPitch - targetPitch);
+
+            // If we are looking close enough, SWING!
+            if (yawDiff < 10.0f && pitchDiff < 10.0f) {
+                client.options.keyAttack.setDown(true); // Native left click hold
+                if (debugTimer++ % 20 == 0) {
+                    sendMessage(client, "§e[Debug] Crosshair aligned. Swinging pickaxe!");
+                }
+            } else {
+                client.options.keyAttack.setDown(false); // Let go of click while turning
             }
         }
     }
 
     private boolean isValidTarget(Minecraft client, BlockPos pos) {
-        // More accurate block name reading for newer Minecraft versions
         String blockName = client.level.getBlockState(pos).getBlock().getDescriptionId().toLowerCase();
         for (String target : targetBlocks) {
             if (blockName.contains(target)) return true;
@@ -126,18 +135,6 @@ public class MiningMacro {
             }
         }
         return closestPos;
-    }
-
-    private void aimAt(Minecraft client, double x, double y, double z) {
-        double dx = x - client.player.getX();
-        double dy = y - client.player.getEyeY();
-        double dz = z - client.player.getZ();
-        
-        double horizDist = Math.sqrt(dx * dx + dz * dz);
-        float yaw = (float) Math.toDegrees(Math.atan2(dz, dx)) - 90.0f;
-        float pitch = (float) -Math.toDegrees(Math.atan2(dy, horizDist));
-        
-        rotationHandler.updateTarget(yaw, pitch);
     }
 
     public void setToolSlot(int slot) { this.toolSlot = slot; }
