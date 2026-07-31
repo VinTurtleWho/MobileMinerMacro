@@ -6,38 +6,23 @@ import net.fabricmc.fabric.api.client.message.v1.ClientSendMessageEvents;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
 import org.lwjgl.glfw.GLFW;
-import java.lang.reflect.Method;
 
 public class MobileMiner implements ModInitializer {
     private boolean oKeyPressed = false;
-    private long windowPointer = -1;
 
     @Override
     public void onInitialize() {
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             if (client.player == null) return;
             
-            // Safe Reflection to find the Pojav Window Pointer
-            if (windowPointer == -1) {
-                try {
-                    Method m = client.getWindow().getClass().getMethod("getHandle");
-                    windowPointer = (long) m.invoke(client.getWindow());
-                } catch (Exception e) {
-                    try {
-                        Method m = client.getWindow().getClass().getMethod("getWindow");
-                        windowPointer = (long) m.invoke(client.getWindow());
-                    } catch (Exception ex) {}
-                }
+            // NO REFLECTION! We let the compiler map this natively to Pojav.
+            long window = client.getWindow().getHandle();
+            
+            boolean isOKeyDown = GLFW.glfwGetKey(window, GLFW.GLFW_KEY_O) == GLFW.GLFW_PRESS;
+            if (isOKeyDown && !oKeyPressed) {
+                MiningMacro.getInstance().toggle(client);
             }
-
-            // The Hardcoded 'O' Key 
-            if (windowPointer != -1) {
-                boolean isOKeyDown = GLFW.glfwGetKey(windowPointer, GLFW.GLFW_KEY_O) == GLFW.GLFW_PRESS;
-                if (isOKeyDown && !oKeyPressed) {
-                    MiningMacro.getInstance().toggle(client);
-                }
-                oKeyPressed = isOKeyDown;
-            }
+            oKeyPressed = isOKeyDown;
 
             MiningMacro.getInstance().onTick(client);
         });
