@@ -23,6 +23,7 @@ public class CombatMacro {
     private Entity currentMob = null;
     private List<BlockPos> currentPath = null;
     private boolean calculatingPath = false;
+    private boolean pathFailed = false; // The abort flag for unreachable targets
 
     // Burst CPS Variables
     private long currentMobFirstHitTime = 0;
@@ -30,6 +31,10 @@ public class CombatMacro {
     private long burstCooldownEndTime = 0;
     private int burstClicksRemaining = 0;
     private final Random random = new Random();
+
+    // The Memory Banks
+    private final Map<Integer, Long> deadEntityBlacklist = new HashMap<>(); // Hit-and-Run corpses
+    private final Map<Integer, Double> unreachableEntityBlacklist = new HashMap<>(); // The Proximity Breaker locks
 
     // Anti-Stuck Variables
     private Vec3 lastPlayerPos = Vec3.ZERO;
@@ -50,6 +55,8 @@ public class CombatMacro {
         targetMobs.clear();
         currentMob = null;
         currentPath = null;
+        deadEntityBlacklist.clear();
+        unreachableEntityBlacklist.clear();
     }
 
     public void toggle(Minecraft client) {
@@ -63,6 +70,9 @@ public class CombatMacro {
             currentPath = null;
             currentMobFirstHitTime = 0;
             burstClicksRemaining = 0;
+            pathFailed = false;
+            deadEntityBlacklist.clear();
+            unreachableEntityBlacklist.clear();
             sendMessage(client, "§7[MobileMiner] Combat Mode Deactivated.");
         }
     }
@@ -91,13 +101,25 @@ public class CombatMacro {
         }
         lastPlayerPos = client.player.position();
 
-        // 2. Find or validate target
+        // 2. Handle Path Aborts (The Unreachable Failsafe)
+        if (pathFailed) {
+            if (currentMob != null) {
+                // Lock the entity in the memory bank with our current distance
+                unreachableEntityBlacklist.put(currentMob.getId(), (double) client.player.distanceTo(currentMob));
+            }
+            currentMob = null;
+            currentPath = null;
+            pathFailed = false;
+            stopMovement(client);
+        }
+
+        // 3. Find or validate target
         if (currentMob == null || !isTargetValid(currentMob, client)) {
             if (currentMob != null) stopMovement(client); 
             
             currentMob = scanForClosestMob(client, 30);
             currentPath = null;
-            currentMobFirstHitTime = 0; // Reset boss timer for new mob
+            currentMobFirstHitTime = 0; 
         }
 
         if (currentMob == null) {
@@ -105,16 +127,15 @@ public class CombatMacro {
             return;
         }
 
-        // Get the real flesh entity to bypass holograms
         Entity actualTarget = getRealFleshEntity(client, currentMob);
         if (actualTarget == null) {
-            currentMob = null; // Hologram is empty, drop it
+            currentMob = null; 
             return; 
         }
 
         double distance = client.player.distanceTo(actualTarget);
 
-        // 3. COMBAT BRAIN
+        // 4. COMBAT BRAIN
         if (distance <= 3.2) {
             stopMovement(client);
             lookAtTorso(client, actualTarget);
@@ -122,39 +143,40 @@ public class CombatMacro {
             return;
         }
 
-        // 4. PATHFINDING BRAIN
+        // 5. PATHFINDING BRAIN
         BlockPos mobPos = actualTarget.blockPosition();
         
         if (currentPath == null && !calculatingPath) {
             calculatingPath = true;
             Pathfinder.calculatePathAsync(client, client.player.blockPosition(), mobPos)
                 .thenAccept(path -> {
-                    currentPath = path;
+                    // This runs in the background. We safely pass the result to the main thread.
+                    if (path == null || path.isEmpty()) {
+                        pathFailed = true; 
+                    } else {
+                        currentPath = path;
+                    }
                     calculatingPath = false;
                 });
         }
 
-        // Fix 1: Kill Blitz Chase. Just stare at the mob and wait for the math to finish to prevent spinning.
         if (calculatingPath) {
             lookAtTorso(client, actualTarget);
             stopMovement(client);
             return;
         }
 
-        // Fix 2: Look-Ahead Smoothing
+        // 6. Look-Ahead Smoothing
         if (currentPath != null && !currentPath.isEmpty()) {
             BlockPos nextWaypoint = currentPath.get(0);
             
-            // Horizontal distance calculation (X and Z only)
             double dx = nextWaypoint.getX() + 0.5 - client.player.getX();
             double dz = nextWaypoint.getZ() + 0.5 - client.player.getZ();
             double distSq = dx * dx + dz * dz;
 
-            // If we are within 1.5 blocks horizontally, we drop the waypoint early to curve the corner!
             if (distSq < 2.25) { 
                 currentPath.remove(0);
                 if (!currentPath.isEmpty()) {
-                    // Update our aim immediately to the next block in line
                     nextWaypoint = currentPath.get(0);
                     dx = nextWaypoint.getX() + 0.5 - client.player.getX();
                     dz = nextWaypoint.getZ() + 0.5 - client.player.getZ();
@@ -164,8 +186,8 @@ public class CombatMacro {
             }
             
             navigateToWaypoint(client, nextWaypoint, dx, dz);
-        } else {
-            // Failsafe direct chase
+        } else if (!calculatingPath) {
+            // Failsafe direct chase if we are somehow empty but not calculating
             directChase(client, actualTarget);
         }
     }
@@ -227,7 +249,6 @@ public class CombatMacro {
         }
     }
 
-    // PURE REFLECTION HARDWARE CLICKER
     private void injectHardwareClick(Minecraft client) {
         try {
             Field clickCountField = KeyMapping.class.getDeclaredField("clickCount");
@@ -273,18 +294,17 @@ public class CombatMacro {
         client.player.setXRot(currentPitch + ((float) mouseDeltaY * stepMult));
     }
 
-    // Fix 3: No Flesh, No Target. Validates if a living mob actually exists under the nametag.
     private Entity getRealFleshEntity(Minecraft client, Entity scannedEntity) {
         if (scannedEntity.getClass().getSimpleName().contains("ArmorStand")) {
             for (Entity e : client.level.getEntities(scannedEntity, scannedEntity.getBoundingBox().inflate(1.5))) {
                 if (e instanceof LivingEntity && !e.getClass().getSimpleName().contains("ArmorStand")) {
                     LivingEntity living = (LivingEntity) e;
                     if (living.getHealth() > 0 && !living.isDeadOrDying() && living.deathTime == 0) {
-                        return e; // Found a living mob beneath the tag!
+                        return e; 
                     }
                 }
             }
-            return null; // Empty hologram (the mob is dead), ignore it completely!
+            return null; 
         }
         return scannedEntity;
     }
@@ -332,13 +352,39 @@ public class CombatMacro {
     private boolean isTargetValid(Entity entity, Minecraft client) {
         if (entity.isRemoved()) return false;
         
-        // Ensure there is actual living flesh behind this entity (filters out dead holograms instantly)
+        int id = entity.getId();
+        
+        // 1. Corpse Blacklist Check
+        if (deadEntityBlacklist.containsKey(id)) {
+            if (System.currentTimeMillis() - deadEntityBlacklist.get(id) > 3000) {
+                deadEntityBlacklist.remove(id);
+            } else {
+                return false; 
+            }
+        }
+
+        // 2. THE PROXIMITY BREAKER (Unreachable Blacklist)
+        if (unreachableEntityBlacklist.containsKey(id)) {
+            double failedDistance = unreachableEntityBlacklist.get(id);
+            double currentDistance = client.player.distanceTo(entity);
+            
+            // The Lock is shattered! We moved 4 blocks closer to him!
+            if (currentDistance <= failedDistance - 4.0) {
+                unreachableEntityBlacklist.remove(id);
+            } else {
+                return false; // Still locked, ignore him and save processing power
+            }
+        }
+        
         Entity flesh = getRealFleshEntity(client, entity);
         if (flesh == null) return false;
         
         if (flesh instanceof LivingEntity) {
             LivingEntity living = (LivingEntity) flesh;
-            if (living.getHealth() <= 0 || living.isDeadOrDying() || living.deathTime > 0) return false;
+            if (living.getHealth() <= 0 || living.isDeadOrDying() || living.deathTime > 0) {
+                deadEntityBlacklist.put(id, System.currentTimeMillis());
+                return false;
+            }
         }
         
         String name = entity.getName().getString().toLowerCase();
