@@ -10,7 +10,9 @@ import net.minecraft.world.phys.Vec3;
 
 import java.lang.reflect.Field;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 
 public class CombatMacro {
@@ -23,11 +25,14 @@ public class CombatMacro {
     private boolean calculatingPath = false;
 
     // Burst CPS Variables
-    private long mobTargetTime = 0;
+    private long currentMobFirstHitTime = 0; // Fix 1: Boss timer only starts AFTER first hit
     private long nextClickTime = 0;
     private long burstCooldownEndTime = 0;
     private int burstClicksRemaining = 0;
     private final Random random = new Random();
+
+    // Corpse Bypass Blacklist (Entity ID -> Time Blacklisted)
+    private final Map<Integer, Long> deadEntityBlacklist = new HashMap<>();
 
     // Anti-Stuck Variables
     private Vec3 lastPlayerPos = Vec3.ZERO;
@@ -48,18 +53,21 @@ public class CombatMacro {
         targetMobs.clear();
         currentMob = null;
         currentPath = null;
+        deadEntityBlacklist.clear();
     }
 
     public void toggle(Minecraft client) {
         if (!isCombatActive) {
             isCombatActive = true;
-            sendMessage(client, "§c[MobileMiner] Combat Mode Activated. Sweaty Mode ON.");
+            sendMessage(client, "§c[MobileMiner] Combat Mode Activated. Blitzing targets...");
         } else {
             isCombatActive = false;
             stopMovement(client);
             currentMob = null;
             currentPath = null;
+            currentMobFirstHitTime = 0;
             burstClicksRemaining = 0;
+            deadEntityBlacklist.clear();
             sendMessage(client, "§7[MobileMiner] Combat Mode Deactivated.");
         }
     }
@@ -94,7 +102,7 @@ public class CombatMacro {
             
             currentMob = scanForClosestMob(client, 30);
             currentPath = null;
-            mobTargetTime = System.currentTimeMillis();
+            currentMobFirstHitTime = 0; // RESET THE BOSS TIMER ON NEW MOB
         }
 
         if (currentMob == null) {
@@ -113,7 +121,7 @@ public class CombatMacro {
             return;
         }
 
-        // 4. PATHFINDING BRAIN
+        // 4. PATHFINDING & BLITZ CHASE BRAIN
         BlockPos mobPos = actualTarget.blockPosition();
         
         if (currentPath == null && !calculatingPath) {
@@ -125,6 +133,7 @@ public class CombatMacro {
                 });
         }
 
+        // Fix 2: Blitz Chase. If math is still thinking, instantly directChase so we never stutter-step.
         if (currentPath != null && !currentPath.isEmpty()) {
             BlockPos nextWaypoint = currentPath.get(0);
             
@@ -171,16 +180,24 @@ public class CombatMacro {
     }
 
     private void executeAdaptiveAttack(Minecraft client) {
-        long timeAlive = System.currentTimeMillis() - mobTargetTime;
         long currentTime = System.currentTimeMillis();
-        boolean isBoss = timeAlive > 1000;
+        
+        // Start the boss timer the exact moment we take our first swing
+        if (currentMobFirstHitTime == 0) {
+            currentMobFirstHitTime = currentTime;
+        }
+
+        long timeSinceFirstHit = currentTime - currentMobFirstHitTime;
+        boolean isBoss = timeSinceFirstHit > 1000; // Only sweat if they tanked hits for a full second
         
         if (!isBoss) {
+            // Phase 1: Calm 1-Tap / 2-Tap TriggerBot
             if (currentTime >= nextClickTime) {
                 injectHardwareClick(client);
-                nextClickTime = currentTime + 350 + random.nextInt(100); 
+                nextClickTime = currentTime + 400 + random.nextInt(100); 
             }
         } else {
+            // Phase 2: Boss Mode Burst-Clicking
             if (burstClicksRemaining > 0) {
                 if (currentTime >= nextClickTime) {
                     injectHardwareClick(client);
@@ -198,19 +215,16 @@ public class CombatMacro {
     // PURE REFLECTION HARDWARE CLICKER (Compiler-Proof)
     private void injectHardwareClick(Minecraft client) {
         try {
-            // Try Mojang Mappings (clickCount)
             Field clickCountField = KeyMapping.class.getDeclaredField("clickCount");
             clickCountField.setAccessible(true);
             clickCountField.setInt(client.options.keyAttack, clickCountField.getInt(client.options.keyAttack) + 1);
         } catch (Exception e) {
             try {
-                // Try Yarn/Fabric Mappings (timesPressed)
                 Field timesPressedField = KeyMapping.class.getDeclaredField("timesPressed");
                 timesPressedField.setAccessible(true);
                 timesPressedField.setInt(client.options.keyAttack, timesPressedField.getInt(client.options.keyAttack) + 1);
             } catch (Exception ex) {
                 try {
-                    // Try Obfuscated Mappings (field_1653)
                     Field obfField = KeyMapping.class.getDeclaredField("field_1653");
                     obfField.setAccessible(true);
                     obfField.setInt(client.options.keyAttack, obfField.getInt(client.options.keyAttack) + 1);
@@ -295,12 +309,28 @@ public class CombatMacro {
         return closest;
     }
 
+    // Fix 3: Hit-and-Run Protocol (Blacklisting corpses instantly)
     private boolean isTargetValid(Entity entity) {
         if (entity.isRemoved()) return false;
         
+        // Clean up or check the blacklist
+        int id = entity.getId();
+        if (deadEntityBlacklist.containsKey(id)) {
+            if (System.currentTimeMillis() - deadEntityBlacklist.get(id) > 3000) {
+                deadEntityBlacklist.remove(id); // Free up memory after 3 seconds
+            } else {
+                return false; // Target is blacklisted (dead but animating)
+            }
+        }
+        
         if (entity instanceof LivingEntity) {
             LivingEntity living = (LivingEntity) entity;
-            if (living.getHealth() <= 0 || living.isDeadOrDying()) return false;
+            
+            // The millisecond it hits 0 HP or starts the death animation, blacklist it forever
+            if (living.getHealth() <= 0 || living.isDeadOrDying() || living.deathTime > 0) {
+                deadEntityBlacklist.put(id, System.currentTimeMillis());
+                return false;
+            }
         }
         
         String name = entity.getName().getString().toLowerCase();
