@@ -10,7 +10,6 @@ import net.minecraft.world.phys.Vec3;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
-import java.util.concurrent.CompletableFuture;
 
 public class CombatMacro {
     private static CombatMacro instance;
@@ -24,6 +23,7 @@ public class CombatMacro {
     // Combat & Movement Timing Variables
     private long lastClickTime = 0;
     private long mobTargetTime = 0;
+    private int clickReleaseTimer = 0; // NEW: Tick-based click release
     private final Random random = new Random();
 
     private CombatMacro() {}
@@ -46,12 +46,13 @@ public class CombatMacro {
     public void toggle(Minecraft client) {
         if (!isCombatActive) {
             isCombatActive = true;
-            sendMessage(client, "§c[MobileMiner] Combat Mode Activated. Scanning for targets...");
+            sendMessage(client, "§c[MobileMiner] Combat Mode Activated. Hunting...");
         } else {
             isCombatActive = false;
             stopMovement(client);
             currentMob = null;
             currentPath = null;
+            clickReleaseTimer = 0;
             sendMessage(client, "§7[MobileMiner] Combat Mode Deactivated.");
         }
     }
@@ -59,13 +60,24 @@ public class CombatMacro {
     public void onTick(Minecraft client) {
         if (client.player == null || client.level == null || !isCombatActive) return;
 
-        // 1. Find or validate target mob
+        // 1. Manage Tick-Based Clicks (Guarantees the game registers the swing)
+        if (clickReleaseTimer > 0) {
+            clickReleaseTimer--;
+            if (clickReleaseTimer == 0) {
+                client.options.keyAttack.setDown(false);
+            }
+        }
+
+        // 2. Find or validate target mob
         if (currentMob == null || !isTargetValid(currentMob)) {
+            // Drop current target to avoid corpse-staring
+            if (currentMob != null) stopMovement(client); 
+            
             currentMob = scanForClosestMob(client, 30); // 30 block search range
             currentPath = null;
             mobTargetTime = System.currentTimeMillis();
             if (currentMob != null) {
-                sendMessage(client, "§e[Combat] Locked onto target entity!");
+                sendMessage(client, "§e[Combat] Locked onto new target!");
             }
         }
 
@@ -76,15 +88,15 @@ public class CombatMacro {
 
         double distance = client.player.distanceTo(currentMob);
 
-        // 2. COMBAT BRAIN (Within 3 blocks: Stop and Attack)
+        // 3. COMBAT BRAIN (Within 3 blocks: Stop and Attack)
         if (distance <= 3.0) {
             stopMovement(client);
-            lookAtEntity(client, currentMob);
+            lookAtTorso(client, currentMob);
             executeAdaptiveAttack(client);
             return;
         }
 
-        // 3. PATHFINDING BRAIN (Beyond 3 blocks: Execute A* Omni-Movement)
+        // 4. PATHFINDING BRAIN (Beyond 3 blocks: Execute A* Omni-Movement)
         BlockPos mobPos = currentMob.blockPosition();
         
         if (currentPath == null && !calculatingPath) {
@@ -100,20 +112,16 @@ public class CombatMacro {
         if (currentPath != null && !currentPath.isEmpty()) {
             BlockPos nextWaypoint = currentPath.get(0);
             
-            // If we reached the current waypoint, drop it and move to the next
             if (client.player.blockPosition().closerThan(nextWaypoint, 1.2)) {
                 currentPath.remove(0);
                 return;
             }
-
             navigateToWaypoint(client, nextWaypoint);
         } else {
-            // Fallback: Direct line-of-sight chase if pathfinding is still computing
             directChase(client, currentMob);
         }
     }
 
-    // OMNI-DIRECTIONAL MOVEMENT EXECUTOR
     private void navigateToWaypoint(Minecraft client, BlockPos waypoint) {
         double targetX = waypoint.getX() + 0.5;
         double targetZ = waypoint.getZ() + 0.5;
@@ -124,11 +132,9 @@ public class CombatMacro {
         float targetYaw = (float) Math.toDegrees(Math.atan2(dz, dx)) - 90.0f;
         smoothLookTowards(client, targetYaw, client.player.getXRot());
 
-        // Hold WASD and Sprint
         client.options.keyUp.setDown(true);
         client.options.keySprint.setDown(true);
 
-        // Jump if waypoint is higher than our feet
         if (waypoint.getY() > client.player.getY() && client.player.horizontalCollision) {
             client.options.keyJump.setDown(true);
         } else {
@@ -150,30 +156,22 @@ public class CombatMacro {
         }
     }
 
-    // ADAPTIVE CPS COMBAT ENGINE
     private void executeAdaptiveAttack(Minecraft client) {
         long timeAlive = System.currentTimeMillis() - mobTargetTime;
         long currentTime = System.currentTimeMillis();
 
-        // Check if it's a "Boss" (alive for more than 1 second in our crosshair)
         boolean isBoss = timeAlive > 1000;
         
         long clickDelay;
         if (!isBoss) {
-            // Phase 1: The Clean 1-Tap TriggerBot
-            clickDelay = 400; 
+            clickDelay = 400; // 1-Tap pacing
         } else {
-            // Phase 2: Sweat Mode - Unpredictable 5-8 Burst CPS with humanized micro-pauses
-            clickDelay = 120 + random.nextInt(100); 
+            clickDelay = 120 + random.nextInt(80); // Boss Sweaty 5-8 CPS pacing
         }
 
         if (currentTime - lastClickTime >= clickDelay) {
             client.options.keyAttack.setDown(true);
-            // Instantly un-click on the next frame to register a proper hit swing
-            CompletableFuture.runAsync(() -> {
-                try { Thread.sleep(25); } catch (Exception e) {}
-                if (client.options != null) client.options.keyAttack.setDown(false);
-            });
+            clickReleaseTimer = 2; // Hold click for exactly 2 game ticks to guarantee a swing
             lastClickTime = currentTime;
         }
     }
@@ -184,13 +182,18 @@ public class CombatMacro {
         while (yawDiff < -180.0f) yawDiff += 360.0f;
         while (yawDiff > 180.0f) yawDiff -= 360.0f;
 
-        client.player.setYRot(currentYaw + (yawDiff * 0.3f)); // Smooth turning speed
+        client.player.setYRot(currentYaw + (yawDiff * 0.3f));
         client.player.setXRot(targetPitch);
     }
 
-    private void lookAtEntity(Minecraft client, Entity entity) {
+    // NEW: Aim at the chest/torso instead of the nametag
+    private void lookAtTorso(Minecraft client, Entity entity) {
         Vec3 eyes = client.player.getEyePosition();
-        Vec3 target = entity.getEyePosition();
+        
+        // Calculate center of mass (50% up the entity's height)
+        double torsoY = entity.getY() + (entity.getBbHeight() * 0.5);
+        Vec3 target = new Vec3(entity.getX(), torsoY, entity.getZ());
+        
         double dx = target.x - eyes.x;
         double dy = target.y - eyes.y;
         double dz = target.z - eyes.z;
@@ -206,7 +209,7 @@ public class CombatMacro {
         client.options.keyUp.setDown(false);
         client.options.keyJump.setDown(false);
         client.options.keySprint.setDown(false);
-        client.options.keyAttack.setDown(false);
+        if (clickReleaseTimer == 0) client.options.keyAttack.setDown(false);
     }
 
     private Entity scanForClosestMob(Minecraft client, double range) {
@@ -215,7 +218,7 @@ public class CombatMacro {
 
         for (Entity entity : client.level.entitiesForRendering()) {
             if (entity == client.player) continue;
-            if (entity instanceof LivingEntity && isTargetValid(entity)) {
+            if (isTargetValid(entity)) {
                 double dist = client.player.distanceTo(entity);
                 if (dist < range && dist < minDistance) {
                     minDistance = dist;
@@ -226,8 +229,14 @@ public class CombatMacro {
         return closest;
     }
 
+    // NEW: Checks if the entity is actually dead/removed to skip death animations
     private boolean isTargetValid(Entity entity) {
-        if (!entity.isAlive()) return false;
+        if (entity.isRemoved()) return false;
+        if (!(entity instanceof LivingEntity)) return false;
+        
+        LivingEntity living = (LivingEntity) entity;
+        if (living.getHealth() <= 0 || living.isDeadOrDying()) return false;
+        
         String name = entity.getName().getString().toLowerCase();
         for (String target : targetMobs) {
             if (name.contains(target)) return true;
