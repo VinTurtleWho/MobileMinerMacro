@@ -20,11 +20,15 @@ public class CombatMacro {
     private List<BlockPos> currentPath = null;
     private boolean calculatingPath = false;
 
-    // Combat & Movement Timing Variables
+    // Combat Variables
     private long lastClickTime = 0;
     private long mobTargetTime = 0;
-    private int clickReleaseTimer = 0; // NEW: Tick-based click release
+    private int clickState = 0; // 0 = idle, 1 = pressed, 2 = released
     private final Random random = new Random();
+
+    // Anti-Stuck Variables
+    private Vec3 lastPlayerPos = Vec3.ZERO;
+    private int stuckTicks = 0;
 
     private CombatMacro() {}
 
@@ -52,7 +56,7 @@ public class CombatMacro {
             stopMovement(client);
             currentMob = null;
             currentPath = null;
-            clickReleaseTimer = 0;
+            clickState = 0;
             sendMessage(client, "§7[MobileMiner] Combat Mode Deactivated.");
         }
     }
@@ -60,25 +64,33 @@ public class CombatMacro {
     public void onTick(Minecraft client) {
         if (client.player == null || client.level == null || !isCombatActive) return;
 
-        // 1. Manage Tick-Based Clicks (Guarantees the game registers the swing)
-        if (clickReleaseTimer > 0) {
-            clickReleaseTimer--;
-            if (clickReleaseTimer == 0) {
-                client.options.keyAttack.setDown(false);
-            }
+        // 1. Strict State-Machine Clicker (Fixes the perma-hold glitch)
+        if (clickState == 1) {
+            client.options.keyAttack.setDown(false); // Force release after 1 tick
+            clickState = 2; // Mark as safely released
         }
 
-        // 2. Find or validate target mob
+        // 2. Anti-Stuck Memory Check
+        double moveDist = client.player.position().distanceToSqr(lastPlayerPos);
+        if (client.options.keyUp.isDown() && moveDist < 0.01) {
+            stuckTicks++;
+            if (stuckTicks > 15) { // Stuck for nearly 1 second
+                client.options.keyJump.setDown(true); // Panic jump
+                currentPath = null; // Force recalculation
+                stuckTicks = 0;
+            }
+        } else {
+            stuckTicks = 0;
+        }
+        lastPlayerPos = client.player.position();
+
+        // 3. Find or validate target
         if (currentMob == null || !isTargetValid(currentMob)) {
-            // Drop current target to avoid corpse-staring
             if (currentMob != null) stopMovement(client); 
             
-            currentMob = scanForClosestMob(client, 30); // 30 block search range
+            currentMob = scanForClosestMob(client, 30);
             currentPath = null;
             mobTargetTime = System.currentTimeMillis();
-            if (currentMob != null) {
-                sendMessage(client, "§e[Combat] Locked onto new target!");
-            }
         }
 
         if (currentMob == null) {
@@ -88,7 +100,7 @@ public class CombatMacro {
 
         double distance = client.player.distanceTo(currentMob);
 
-        // 3. COMBAT BRAIN (Within 3 blocks: Stop and Attack)
+        // 4. COMBAT BRAIN
         if (distance <= 3.0) {
             stopMovement(client);
             lookAtTorso(client, currentMob);
@@ -96,7 +108,7 @@ public class CombatMacro {
             return;
         }
 
-        // 4. PATHFINDING BRAIN (Beyond 3 blocks: Execute A* Omni-Movement)
+        // 5. PATHFINDING BRAIN
         BlockPos mobPos = currentMob.blockPosition();
         
         if (currentPath == null && !calculatingPath) {
@@ -108,11 +120,11 @@ public class CombatMacro {
                 });
         }
 
-        // Follow the path using omni-directional movement
         if (currentPath != null && !currentPath.isEmpty()) {
             BlockPos nextWaypoint = currentPath.get(0);
             
-            if (client.player.blockPosition().closerThan(nextWaypoint, 1.2)) {
+            // Increased drop radius to 1.5 to prevent edge-clipping
+            if (client.player.blockPosition().closerThan(nextWaypoint, 1.5)) {
                 currentPath.remove(0);
                 return;
             }
@@ -125,19 +137,18 @@ public class CombatMacro {
     private void navigateToWaypoint(Minecraft client, BlockPos waypoint) {
         double targetX = waypoint.getX() + 0.5;
         double targetZ = waypoint.getZ() + 0.5;
-
         double dx = targetX - client.player.getX();
         double dz = targetZ - client.player.getZ();
 
         float targetYaw = (float) Math.toDegrees(Math.atan2(dz, dx)) - 90.0f;
-        smoothLookTowards(client, targetYaw, client.player.getXRot());
+        humanizedLookTowards(client, targetYaw, client.player.getXRot());
 
         client.options.keyUp.setDown(true);
         client.options.keySprint.setDown(true);
 
         if (waypoint.getY() > client.player.getY() && client.player.horizontalCollision) {
             client.options.keyJump.setDown(true);
-        } else {
+        } else if (stuckTicks == 0) {
             client.options.keyJump.setDown(false);
         }
     }
@@ -148,50 +159,70 @@ public class CombatMacro {
         double dz = pos.z - client.player.getZ();
         float targetYaw = (float) Math.toDegrees(Math.atan2(dz, dx)) - 90.0f;
 
-        smoothLookTowards(client, targetYaw, client.player.getXRot());
+        humanizedLookTowards(client, targetYaw, client.player.getXRot());
         client.options.keyUp.setDown(true);
         client.options.keySprint.setDown(true);
+        
         if (client.player.horizontalCollision) {
             client.options.keyJump.setDown(true);
+        } else if (stuckTicks == 0) {
+            client.options.keyJump.setDown(false);
         }
     }
 
     private void executeAdaptiveAttack(Minecraft client) {
         long timeAlive = System.currentTimeMillis() - mobTargetTime;
         long currentTime = System.currentTimeMillis();
-
         boolean isBoss = timeAlive > 1000;
         
-        long clickDelay;
-        if (!isBoss) {
-            clickDelay = 400; // 1-Tap pacing
-        } else {
-            clickDelay = 120 + random.nextInt(80); // Boss Sweaty 5-8 CPS pacing
-        }
+        long clickDelay = isBoss ? (120 + random.nextInt(80)) : 400;
 
-        if (currentTime - lastClickTime >= clickDelay) {
+        if (currentTime - lastClickTime >= clickDelay && clickState != 1) {
             client.options.keyAttack.setDown(true);
-            clickReleaseTimer = 2; // Hold click for exactly 2 game ticks to guarantee a swing
+            clickState = 1; // Mark as pressed (will be released next tick)
             lastClickTime = currentTime;
         }
     }
 
-    private void smoothLookTowards(Minecraft client, float targetYaw, float targetPitch) {
+    private void humanizedLookTowards(Minecraft client, float targetYaw, float targetPitch) {
         float currentYaw = client.player.getYRot();
         float yawDiff = targetYaw - currentYaw;
         while (yawDiff < -180.0f) yawDiff += 360.0f;
         while (yawDiff > 180.0f) yawDiff -= 360.0f;
 
-        client.player.setYRot(currentYaw + (yawDiff * 0.3f));
-        client.player.setXRot(targetPitch);
+        float currentPitch = client.player.getXRot();
+        float pitchDiff = targetPitch - currentPitch;
+
+        // GCD Math from Layer 1 for buttery human aim
+        double sensitivity = client.options.sensitivity().get();
+        float f = (float) (sensitivity * 0.6 + 0.2);
+        float gcd = f * f * f * 8.0f;
+        float stepMult = gcd * 0.15f;
+
+        float speed = 0.35f;
+        int mouseDeltaX = Math.round((yawDiff * speed) / stepMult);
+        int mouseDeltaY = Math.round((pitchDiff * speed) / stepMult);
+
+        if (mouseDeltaX == 0 && Math.abs(yawDiff) > stepMult) mouseDeltaX = (int) Math.signum(yawDiff);
+        if (mouseDeltaY == 0 && Math.abs(pitchDiff) > stepMult) mouseDeltaY = (int) Math.signum(pitchDiff);
+
+        client.player.setYRot(currentYaw + ((float) mouseDeltaX * stepMult));
+        client.player.setXRot(currentPitch + ((float) mouseDeltaY * stepMult));
     }
 
-    // NEW: Aim at the chest/torso instead of the nametag
+    // THE ARMOR STAND FIX
     private void lookAtTorso(Minecraft client, Entity entity) {
         Vec3 eyes = client.player.getEyePosition();
         
-        // Calculate center of mass (50% up the entity's height)
-        double torsoY = entity.getY() + (entity.getBbHeight() * 0.5);
+        double torsoY = entity.getY();
+        
+        // Check if the entity is an invisible Armor Stand acting as a nametag
+        if (entity.getClass().getSimpleName().contains("ArmorStand")) {
+            torsoY -= 1.0; // Aim 1 block straight down to hit the actual zombie underneath
+        } else {
+            torsoY += (entity.getBbHeight() * 0.5); // Normal torso aim
+        }
+        
         Vec3 target = new Vec3(entity.getX(), torsoY, entity.getZ());
         
         double dx = target.x - eyes.x;
@@ -202,14 +233,14 @@ public class CombatMacro {
         float yaw = (float) Math.toDegrees(Math.atan2(dz, dx)) - 90.0f;
         float pitch = (float) -Math.toDegrees(Math.atan2(dy, dist));
 
-        smoothLookTowards(client, yaw, pitch);
+        humanizedLookTowards(client, yaw, pitch);
     }
 
     private void stopMovement(Minecraft client) {
         client.options.keyUp.setDown(false);
         client.options.keyJump.setDown(false);
         client.options.keySprint.setDown(false);
-        if (clickReleaseTimer == 0) client.options.keyAttack.setDown(false);
+        if (clickState != 1) client.options.keyAttack.setDown(false);
     }
 
     private Entity scanForClosestMob(Minecraft client, double range) {
@@ -229,13 +260,13 @@ public class CombatMacro {
         return closest;
     }
 
-    // NEW: Checks if the entity is actually dead/removed to skip death animations
     private boolean isTargetValid(Entity entity) {
         if (entity.isRemoved()) return false;
-        if (!(entity instanceof LivingEntity)) return false;
         
-        LivingEntity living = (LivingEntity) entity;
-        if (living.getHealth() <= 0 || living.isDeadOrDying()) return false;
+        // Ignore dead entities
+        if (entity instanceof LivingEntity && (((LivingEntity) entity).getHealth() <= 0 || ((LivingEntity) entity).isDeadOrDying())) {
+            return false;
+        }
         
         String name = entity.getName().getString().toLowerCase();
         for (String target : targetMobs) {
