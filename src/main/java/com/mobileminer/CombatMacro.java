@@ -102,7 +102,6 @@ public class CombatMacro {
             return;
         }
 
-        // Apply Hologram Bypass
         Entity actualTarget = getRealFleshEntity(client, currentMob);
         double distance = client.player.distanceTo(actualTarget);
 
@@ -171,49 +170,52 @@ public class CombatMacro {
         }
     }
 
-    // THE NATIVE BURST-CPS ENGINE
     private void executeAdaptiveAttack(Minecraft client) {
         long timeAlive = System.currentTimeMillis() - mobTargetTime;
         long currentTime = System.currentTimeMillis();
         boolean isBoss = timeAlive > 1000;
         
         if (!isBoss) {
-            // Phase 1: Calm 1-Tap TriggerBot
             if (currentTime >= nextClickTime) {
                 injectHardwareClick(client);
-                nextClickTime = currentTime + 350 + random.nextInt(100); // 350-450ms pacing
+                nextClickTime = currentTime + 350 + random.nextInt(100); 
             }
         } else {
-            // Phase 2: Boss Mode Burst-Clicking (Jitter/Butterfly mimic)
             if (burstClicksRemaining > 0) {
                 if (currentTime >= nextClickTime) {
                     injectHardwareClick(client);
                     burstClicksRemaining--;
-                    // Rapid clicking inside the burst (50ms - 85ms between clicks = 12-20 CPS natively)
                     nextClickTime = currentTime + 50 + random.nextInt(36); 
                 }
             } else if (currentTime >= burstCooldownEndTime) {
-                // Time to start a new sweaty burst!
-                burstClicksRemaining = 3 + random.nextInt(4); // 3 to 6 clicks in a row
-                // The fatigue pause between bursts (150ms - 250ms delay before clicking again)
+                burstClicksRemaining = 3 + random.nextInt(4); 
                 burstCooldownEndTime = currentTime + 150 + random.nextInt(100);
                 nextClickTime = currentTime;
             }
         }
     }
 
-    // Safely injects a native hardware click to the game's internal queue
+    // PURE REFLECTION HARDWARE CLICKER (Compiler-Proof)
     private void injectHardwareClick(Minecraft client) {
         try {
-            // Direct injection to the hardware queue (Watchdog cannot tell the difference between this and a real mouse)
-            KeyMapping.click(client.options.keyAttack.getKey());
+            // Try Mojang Mappings (clickCount)
+            Field clickCountField = KeyMapping.class.getDeclaredField("clickCount");
+            clickCountField.setAccessible(true);
+            clickCountField.setInt(client.options.keyAttack, clickCountField.getInt(client.options.keyAttack) + 1);
         } catch (Exception e) {
             try {
-                // Failsafe: Use reflection to forcefully bump the game's internal clickCount integer if mappings mismatch
-                Field clickCountField = KeyMapping.class.getDeclaredField("clickCount");
-                clickCountField.setAccessible(true);
-                clickCountField.setInt(client.options.keyAttack, clickCountField.getInt(client.options.keyAttack) + 1);
-            } catch (Exception ex) {}
+                // Try Yarn/Fabric Mappings (timesPressed)
+                Field timesPressedField = KeyMapping.class.getDeclaredField("timesPressed");
+                timesPressedField.setAccessible(true);
+                timesPressedField.setInt(client.options.keyAttack, timesPressedField.getInt(client.options.keyAttack) + 1);
+            } catch (Exception ex) {
+                try {
+                    // Try Obfuscated Mappings (field_1653)
+                    Field obfField = KeyMapping.class.getDeclaredField("field_1653");
+                    obfField.setAccessible(true);
+                    obfField.setInt(client.options.keyAttack, obfField.getInt(client.options.keyAttack) + 1);
+                } catch (Exception exx) {}
+            }
         }
     }
 
