@@ -6,7 +6,7 @@ import com.mobileminer.perception.*;
 
 public class BotController {
     private final BotContext context;
-    private final WorldObserver worldObserver; // The controller now owns the observer
+    private final WorldObserver worldObserver;
 
     public BotController() {
         this.context = new BotContext();
@@ -26,7 +26,9 @@ public class BotController {
             String targetState = (wSnap.closestTarget != null) ? "§bFound: " + wSnap.closestTarget.toString() : "§8No Target";
             
             String debugTxt = String.format("%s | %s | HP:%.1f", moveState, targetState, pSnap.health);
-            client.player.displayClientMessage(Component.literal(debugTxt), true);
+            
+            // Updated to modern Mojmap action bar method
+            client.player.sendOverlayMessage(Component.literal(debugTxt));
         }
     }
 }

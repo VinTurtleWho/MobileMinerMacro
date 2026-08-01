@@ -2,12 +2,11 @@ package com.mobileminer.perception;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Registry;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 
 public class WorldObserver {
-    // No longer static! The controller will own this instance.
     private WorldSnapshot lastSnapshot = new WorldSnapshot(null, 0);
 
     public WorldSnapshot getSnapshot(Minecraft client, String targetId, int radius) {
@@ -25,9 +24,9 @@ public class WorldObserver {
                 for (int z = -radius; z <= radius; z++) {
                     BlockPos p = playerPos.offset(x, y, z);
                     BlockState state = client.level.getBlockState(p);
-                    String blockId = Registry.BLOCK.getKey(state.getBlock()).getPath();
+                    // Updated to modern Mojmap mappings
+                    String blockId = BuiltInRegistries.BLOCK.getKey(state.getBlock()).getPath();
                     
-                    // FIXED: Strict equality check
                     if (blockId.equals(targetId.toLowerCase())) {
                         double dist = Math.sqrt(p.distToCenterSqr(eyePos.x, eyePos.y, eyePos.z));
                         if (dist < minDistance) {
