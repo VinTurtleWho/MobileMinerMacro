@@ -9,17 +9,25 @@ import org.lwjgl.glfw.GLFW;
 
 import java.lang.reflect.Field;
 
+// 1. The New Import
+import com.mobileminer.core.BotController;
+
 public class MobileMiner implements ModInitializer {
     private boolean oKeyPressed = false;
     private long windowPointer = -1;
-    
-    public static String currentMode = "mining"; 
+    public static String currentMode = "mining";
+
+    // 2. Instantiate our new architecture
+    private final BotController botController = new BotController();
 
     @Override
     public void onInitialize() {
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             if (client.player == null) return;
-            
+
+            // 3. Hook the new perception layer into the game loop!
+            botController.onTick(client);
+
             if (windowPointer == -1) {
                 windowPointer = getSafeWindowPointer(client);
             }
@@ -32,7 +40,7 @@ public class MobileMiner implements ModInitializer {
                 oKeyPressed = isOKeyDown;
             }
 
-            // Route the tick to the active module
+            // Route the tick to the active old module
             if (currentMode.equals("mining")) {
                 MiningMacro.getInstance().onTick(client);
             } else if (currentMode.equals("combat")) {
@@ -73,7 +81,7 @@ public class MobileMiner implements ModInitializer {
     private void handleCommand(Minecraft client, String message) {
         if (client.player == null) return;
         String[] parts = message.split(" ");
-        
+
         if (parts.length == 1 || (parts.length == 2 && parts[1].equalsIgnoreCase("toggle"))) {
             toggleCurrentMode(client);
             return;
@@ -81,7 +89,7 @@ public class MobileMiner implements ModInitializer {
 
         if (parts.length >= 2) {
             String cmd = parts[1].toLowerCase();
-            
+
             if (cmd.equals("mode") && parts.length >= 3) {
                 String newMode = parts[2].toLowerCase();
                 if (newMode.equals("mining") || newMode.equals("combat")) {
@@ -94,7 +102,7 @@ public class MobileMiner implements ModInitializer {
             else if (cmd.equals("addblock") && parts.length >= 3) {
                 MiningMacro.getInstance().addTargetBlock(parts[2].toLowerCase());
                 sendMessage(client, "§a[MobileMiner] Added block: " + parts[2]);
-            } 
+            }
             else if (cmd.equals("addmob") && parts.length >= 3) {
                 CombatMacro.getInstance().addTargetMob(parts[2].toLowerCase());
                 sendMessage(client, "§a[MobileMiner] Added mob target: " + parts[2]);
@@ -103,7 +111,7 @@ public class MobileMiner implements ModInitializer {
                 MiningMacro.getInstance().clearTargetBlocks();
                 CombatMacro.getInstance().clearTargetMobs();
                 sendMessage(client, "§e[MobileMiner] Cleared all tracking memory.");
-            } 
+            }
         }
     }
 
