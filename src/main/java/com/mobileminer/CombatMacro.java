@@ -65,7 +65,7 @@ public class CombatMacro {
     public void toggle(Minecraft client) {
         if (!isCombatActive) {
             isCombatActive = true;
-            sendMessage(client, "§c[MobileMiner] Combat Mode Activated. Crypt Sweeper ON.");
+            sendMessage(client, "§c[MobileMiner] Combat Mode Activated.");
         } else {
             isCombatActive = false;
             stopMovement(client);
@@ -115,22 +115,22 @@ public class CombatMacro {
             stopMovement(client);
         }
 
-        if (currentMob == null || !isTargetValid(currentMob, client) || (currentTime - lastTargetScanTime > 500)) {
-            
+        if (currentMob == null || !isTargetValid(currentMob, client) || (currentTime - lastTargetScanTime > 400)) {
             if (currentMob != null && !isTargetValid(currentMob, client)) {
                 stopMovement(client); 
             }
             
-            Entity bestMob = scanForBestClusterMob(client, 30);
+            Entity bestMob = scanForBestClusterMob(client, 25);
             
             if (bestMob != null && bestMob != currentMob) {
                 currentMob = bestMob;
                 currentPath = null;
                 currentMobFirstHitTime = 0; 
                 
-                targetOffsetX = (random.nextDouble() - 0.5) * 0.3;
-                targetOffsetY = (random.nextDouble() - 0.5) * 0.3;
-                targetOffsetZ = (random.nextDouble() - 0.5) * 0.3;
+                // Tightened offsets so crosshair stays directly on center-mass
+                targetOffsetX = (random.nextDouble() - 0.5) * 0.08;
+                targetOffsetY = (random.nextDouble() - 0.5) * 0.08;
+                targetOffsetZ = (random.nextDouble() - 0.5) * 0.08;
             } else if (bestMob == null) {
                 currentMob = null;
             }
@@ -150,16 +150,15 @@ public class CombatMacro {
         }
 
         double distance = client.player.distanceTo(actualTarget);
-
         boolean canSeeTarget = hasClearLineOfSight(client, client.player.getEyePosition(), actualTarget.getEyePosition());
 
         if (canSeeTarget || (currentPath == null || currentPath.isEmpty())) {
-            lookAtLazyTorso(client, actualTarget);
+            lookAtCenterMass(client, actualTarget);
         } else {
             BlockPos nextWaypoint = currentPath.get(0);
             double targetX = nextWaypoint.getX() + 0.5;
             double targetZ = nextWaypoint.getZ() + 0.5;
-            double targetY = nextWaypoint.getY() + 1.2; 
+            double targetY = nextWaypoint.getY() + 1.62; // Aligned with eye-level to stop floor staring
             
             double dx = targetX - client.player.getX();
             double dy = targetY - client.player.getEyePosition().y;
@@ -169,10 +168,13 @@ public class CombatMacro {
             float pathYaw = (float) Math.toDegrees(Math.atan2(dz, dx)) - 90.0f;
             float pathPitch = (float) -Math.toDegrees(Math.atan2(dy, dist));
 
+            // Clamp pitch to horizon (-15 to +15 deg) so player eyes stay up
+            pathPitch = Math.max(-15.0f, Math.min(15.0f, pathPitch));
+
             humanizedLookTowards(client, pathYaw, pathPitch);
         }
 
-        if (distance <= 3.2 && canSeeTarget) { 
+        if (distance <= 3.3 && canSeeTarget) { 
             stopMovement(client); 
             executeAdaptiveAttack(client);
             return;
@@ -205,7 +207,7 @@ public class CombatMacro {
             double dz = nextWaypoint.getZ() + 0.5 - client.player.getZ();
             double distSq = dx * dx + dz * dz;
 
-            if (distSq < 2.25) { 
+            if (distSq < 1.8) { 
                 currentPath.remove(0);
                 if (!currentPath.isEmpty()) {
                     nextWaypoint = currentPath.get(0);
@@ -225,7 +227,6 @@ public class CombatMacro {
     private void navigateWithStrafing(Minecraft client, BlockPos waypoint, double dx, double dz) {
         float moveYaw = (float) Math.toDegrees(Math.atan2(dz, dx)) - 90.0f;
         applyWASDKeys(client, moveYaw);
-
         client.options.keySprint.setDown(true);
 
         if ((waypoint.getY() > client.player.getY() || client.player.horizontalCollision) && stuckTicks == 0 && canJump(client)) {
@@ -284,18 +285,18 @@ public class CombatMacro {
         if (!isBoss) {
             if (currentTime >= nextClickTime) {
                 injectHardwareClick(client);
-                nextClickTime = currentTime + 400 + random.nextInt(100); 
+                nextClickTime = currentTime + 350 + random.nextInt(80); 
             }
         } else {
             if (burstClicksRemaining > 0) {
                 if (currentTime >= nextClickTime) {
                     injectHardwareClick(client);
                     burstClicksRemaining--;
-                    nextClickTime = currentTime + 50 + random.nextInt(36); 
+                    nextClickTime = currentTime + 50 + random.nextInt(30); 
                 }
             } else if (currentTime >= burstCooldownEndTime) {
                 burstClicksRemaining = 3 + random.nextInt(4); 
-                burstCooldownEndTime = currentTime + 150 + random.nextInt(100);
+                burstCooldownEndTime = currentTime + 140 + random.nextInt(80);
                 nextClickTime = currentTime;
             }
         }
@@ -315,10 +316,10 @@ public class CombatMacro {
         }
     }
 
-    private void lookAtLazyTorso(Minecraft client, Entity entity) {
+    private void lookAtCenterMass(Minecraft client, Entity entity) {
         Vec3 eyes = client.player.getEyePosition();
         
-        double torsoY = entity.getY() + (entity.getBbHeight() * 0.5) + targetOffsetY; 
+        double torsoY = entity.getY() + (entity.getBbHeight() * 0.55) + targetOffsetY; 
         Vec3 target = new Vec3(entity.getX() + targetOffsetX, torsoY, entity.getZ() + targetOffsetZ);
         
         double dx = target.x - eyes.x;
@@ -338,7 +339,8 @@ public class CombatMacro {
 
         float pitchDiff = targetPitch - currentPitch;
 
-        if (Math.abs(yawDiff) < 12.0f && Math.abs(pitchDiff) < 12.0f) {
+        // Reduced deadzone from 12.0 to 2.5 so crosshair stays locked on body
+        if (Math.abs(yawDiff) < 2.5f && Math.abs(pitchDiff) < 2.5f) {
             return; 
         }
 
@@ -359,15 +361,15 @@ public class CombatMacro {
         float pitchAbs = Math.abs(pitchDiff);
 
         float maxYawSpeed;
-        if (yawAbs > 100) maxYawSpeed = 70.0f;       
-        else if (yawAbs > 45) maxYawSpeed = 45.0f;   
-        else if (yawAbs > 15) maxYawSpeed = 25.0f;   
-        else maxYawSpeed = Math.max(3.0f, yawAbs * 0.4f); 
+        if (yawAbs > 100) maxYawSpeed = 75.0f;       
+        else if (yawAbs > 45) maxYawSpeed = 50.0f;   
+        else if (yawAbs > 15) maxYawSpeed = 30.0f;   
+        else maxYawSpeed = Math.max(4.0f, yawAbs * 0.5f); 
 
         float maxPitchSpeed;
-        if (pitchAbs > 45) maxPitchSpeed = 40.0f;
-        else if (pitchAbs > 15) maxPitchSpeed = 20.0f;
-        else maxPitchSpeed = Math.max(2.0f, pitchAbs * 0.4f);
+        if (pitchAbs > 45) maxPitchSpeed = 45.0f;
+        else if (pitchAbs > 15) maxPitchSpeed = 25.0f;
+        else maxPitchSpeed = Math.max(3.0f, pitchAbs * 0.5f);
 
         yawDiff = Math.max(-maxYawSpeed, Math.min(maxYawSpeed, yawDiff));
         pitchDiff = Math.max(-maxPitchSpeed, Math.min(maxPitchSpeed, pitchDiff));
@@ -377,7 +379,7 @@ public class CombatMacro {
         float gcd = f * f * f * 8.0f;
         float stepMult = gcd * 0.15f;
 
-        float speed = 0.35f;
+        float speed = 0.45f;
         int mouseDeltaX = Math.round((yawDiff * speed) / stepMult);
         int mouseDeltaY = Math.round((pitchDiff * speed) / stepMult);
 
@@ -451,6 +453,7 @@ public class CombatMacro {
 
     private boolean hasClearLineOfSight(Minecraft client, Vec3 start, Vec3 end) {
         double dist = start.distanceTo(end);
+        if (dist < 0.5) return true;
         int steps = (int) Math.ceil(dist * 2); 
         double dx = (end.x - start.x) / steps;
         double dy = (end.y - start.y) / steps;
@@ -458,7 +461,8 @@ public class CombatMacro {
 
         for (int i = 1; i < steps; i++) {
             BlockPos pos = new BlockPos((int)(start.x + dx * i), (int)(start.y + dy * i), (int)(start.z + dz * i));
-            if (!client.level.getBlockState(pos).isAir()) { 
+            // Only block vision if it is a solid collidable block
+            if (client.level.getBlockState(pos).isSolidRender(client.level, pos)) { 
                 return false; 
             }
         }
