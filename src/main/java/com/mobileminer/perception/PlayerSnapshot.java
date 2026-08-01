@@ -10,9 +10,9 @@ public class PlayerSnapshot {
     public final float pitch;
     public final float health;
     public final String heldItem;
-    public final boolean hasVelocity;
+    public final boolean actuallyMoved;
 
-    public PlayerSnapshot(int tick, Vec3 position, Vec3 velocity, float yaw, float pitch, float health, String heldItem) {
+    public PlayerSnapshot(int tick, Vec3 position, Vec3 velocity, float yaw, float pitch, float health, String heldItem, boolean actuallyMoved) {
         this.tick = tick;
         this.position = position;
         this.velocity = velocity;
@@ -20,6 +20,6 @@ public class PlayerSnapshot {
         this.pitch = pitch;
         this.health = health;
         this.heldItem = heldItem;
-        this.hasVelocity = velocity.lengthSqr() > 0.0001; 
+        this.actuallyMoved = actuallyMoved; 
     }
 }
