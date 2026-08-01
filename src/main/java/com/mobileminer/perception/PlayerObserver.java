@@ -9,6 +9,6 @@ public class PlayerObserver {
         if (player == null) return null;
         
         String item = player.getMainHandItem().getHoverName().getString();
-        return new PlayerSnapshot(player.position(), player.getYRot(), player.getXRot(), player.getHealth(), item);
+        return new PlayerSnapshot(player.tickCount, player.position(), player.getDeltaMovement(), player.getYRot(), player.getXRot(), player.getHealth(), item);
     }
 }
