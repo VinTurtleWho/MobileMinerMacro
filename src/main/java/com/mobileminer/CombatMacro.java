@@ -148,7 +148,6 @@ public class CombatMacro {
             return; 
         }
 
-        // INSTANT DROP: Never track a mob falling over
         if (actualTarget instanceof LivingEntity) {
             LivingEntity le = (LivingEntity) actualTarget;
             if (le.getHealth() <= 0 || le.isDeadOrDying() || le.deathTime > 0) {
@@ -337,7 +336,6 @@ public class CombatMacro {
         float targetYaw = (float) Math.toDegrees(Math.atan2(dz, dx)) - 90.0f;
         float targetPitch;
         
-        // GIMBAL LOCK PREVENTION & PITCH CLAMP
         if (dist < 0.3) {
             targetPitch = client.player.getXRot(); 
         } else {
@@ -406,15 +404,23 @@ public class CombatMacro {
 
     private Entity getRealFleshEntity(Minecraft client, Entity scannedEntity) {
         if (scannedEntity.getClass().getSimpleName().contains("ArmorStand")) {
+            Entity closestFlesh = null;
+            double closestDist = Double.MAX_VALUE;
+            
             for (Entity e : client.level.getEntities(scannedEntity, scannedEntity.getBoundingBox().inflate(1.5))) {
-                if (e instanceof LivingEntity && !(e instanceof net.minecraft.world.entity.player.Player) && !e.getClass().getSimpleName().contains("ArmorStand")) {
+                if (e instanceof LivingEntity && !e.getClass().getSimpleName().contains("ArmorStand")) {
                     LivingEntity living = (LivingEntity) e;
                     if (living.getHealth() > 0 && !living.isDeadOrDying() && living.deathTime == 0) {
-                        return e; 
+                        // THE PROXIMITY MATH FIX: Find the exact entity perfectly stacked on the hologram
+                        double dist = e.distanceToSqr(scannedEntity);
+                        if (dist < closestDist) {
+                            closestDist = dist;
+                            closestFlesh = e;
+                        }
                     }
                 }
             }
-            return null; 
+            return closestFlesh; 
         }
         return scannedEntity;
     }
@@ -468,7 +474,6 @@ public class CombatMacro {
     private boolean hasClearLineOfSight(Minecraft client, Vec3 start, Vec3 end) {
         double dist = start.distanceTo(end);
         
-        // CORNER CLIPPING BYPASS: If mob is within 2.5 blocks, assume clear sight to prevent wall-grazing drops
         if (dist < 2.5) return true; 
         
         int steps = (int) Math.ceil(dist * 2); 
@@ -486,7 +491,7 @@ public class CombatMacro {
     }
 
     private boolean isTargetValid(Entity entity, Minecraft client) {
-        if (entity.isRemoved() || entity instanceof net.minecraft.world.entity.player.Player) return false;
+        if (entity.isRemoved()) return false; // Reverted the bad Player filter here!
         
         int id = entity.getId();
         
