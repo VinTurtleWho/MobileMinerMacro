@@ -80,148 +80,6 @@ public class CombatMacro {
         }
     }
 
-    public void onTick(Minecraft client) {
-        if (client.player == null || client.level == null || !isCombatActive) return;
-
-        long currentTime = System.currentTimeMillis();
-
-        double moveDist = client.player.position().distanceToSqr(lastPlayerPos);
-        if ((client.options.keyUp.isDown() || client.options.keyLeft.isDown() || client.options.keyRight.isDown()) && moveDist < 0.005) {
-            stuckTicks++;
-            if (stuckTicks > 10 && canJump(client)) { 
-                client.options.keyJump.setDown(true); 
-                currentPath = null; 
-                stuckTicks = 0;
-            }
-        } else {
-            stuckTicks = 0;
-            if (currentPath != null && !currentPath.isEmpty()) {
-                if (currentPath.get(0).getY() <= client.player.getY() && !client.player.horizontalCollision) {
-                    client.options.keyJump.setDown(false);
-                }
-            } else {
-                client.options.keyJump.setDown(false);
-            }
-        }
-        lastPlayerPos = client.player.position();
-
-        if (pathFailed) {
-            if (currentMob != null) {
-                unreachableEntityBlacklist.put(currentMob.getId(), (double) client.player.distanceTo(currentMob));
-            }
-            currentMob = null;
-            currentPath = null;
-            pathFailed = false;
-            stopMovement(client);
-        }
-
-        if (currentMob == null || !isTargetValid(currentMob, client) || (currentTime - lastTargetScanTime > 400)) {
-            if (currentMob != null && !isTargetValid(currentMob, client)) {
-                stopMovement(client); 
-            }
-            
-            Entity bestMob = scanForBestClusterMob(client, 25);
-            
-            if (bestMob != null && bestMob != currentMob) {
-                currentMob = bestMob;
-                currentPath = null;
-                currentMobFirstHitTime = 0; 
-                
-                targetOffsetX = (random.nextDouble() - 0.5) * 0.08;
-                targetOffsetY = (random.nextDouble() - 0.5) * 0.08;
-                targetOffsetZ = (random.nextDouble() - 0.5) * 0.08;
-            } else if (bestMob == null) {
-                currentMob = null;
-            }
-            
-            lastTargetScanTime = currentTime;
-        }
-
-        if (currentMob == null) {
-            stopMovement(client);
-            return;
-        }
-
-        Entity actualTarget = getRealFleshEntity(client, currentMob);
-        if (actualTarget == null) {
-            currentMob = null; 
-            return; 
-        }
-
-        double distance = client.player.distanceTo(actualTarget);
-        boolean canSeeTarget = hasClearLineOfSight(client, client.player.getEyePosition(), actualTarget.getEyePosition());
-
-        if (canSeeTarget || (currentPath == null || currentPath.isEmpty())) {
-            lookAtCenterMass(client, actualTarget);
-        } else {
-            BlockPos nextWaypoint = currentPath.get(0);
-            double targetX = nextWaypoint.getX() + 0.5;
-            double targetZ = nextWaypoint.getZ() + 0.5;
-            double targetY = nextWaypoint.getY() + 1.62; 
-            
-            double dx = targetX - client.player.getX();
-            double dy = targetY - client.player.getEyePosition().y;
-            double dz = targetZ - client.player.getZ();
-            double dist = Math.sqrt(dx * dx + dz * dz);
-
-            float pathYaw = (float) Math.toDegrees(Math.atan2(dz, dx)) - 90.0f;
-            float pathPitch = (float) -Math.toDegrees(Math.atan2(dy, dist));
-
-            pathPitch = Math.max(-15.0f, Math.min(15.0f, pathPitch));
-
-            humanizedLookTowards(client, pathYaw, pathPitch);
-        }
-
-        if (distance <= 3.3 && canSeeTarget) { 
-            stopMovement(client); 
-            executeAdaptiveAttack(client);
-            return;
-        }
-
-        BlockPos mobPos = actualTarget.blockPosition();
-        
-        if (currentPath == null && !calculatingPath) {
-            calculatingPath = true;
-            Pathfinder.calculatePathAsync(client, client.player.blockPosition(), mobPos)
-                .thenAccept(path -> {
-                    if (path == null || path.isEmpty()) {
-                        pathFailed = true; 
-                    } else {
-                        currentPath = path;
-                    }
-                    calculatingPath = false;
-                });
-        }
-
-        if (calculatingPath) {
-            stopMovement(client);
-            return;
-        }
-
-        if (currentPath != null && !currentPath.isEmpty()) {
-            BlockPos nextWaypoint = currentPath.get(0);
-            
-            double dx = nextWaypoint.getX() + 0.5 - client.player.getX();
-            double dz = nextWaypoint.getZ() + 0.5 - client.player.getZ();
-            double distSq = dx * dx + dz * dz;
-
-            if (distSq < 1.8) { 
-                currentPath.remove(0);
-                if (!currentPath.isEmpty()) {
-                    nextWaypoint = currentPath.get(0);
-                    dx = nextWaypoint.getX() + 0.5 - client.player.getX();
-                    dz = nextWaypoint.getZ() + 0.5 - client.player.getZ();
-                } else {
-                    return;
-                }
-            }
-            
-            navigateWithStrafing(client, nextWaypoint, dx, dz);
-        } else if (!calculatingPath) {
-            directStrafeChase(client, actualTarget);
-        }
-    }
-
     private void navigateWithStrafing(Minecraft client, BlockPos waypoint, double dx, double dz) {
         float moveYaw = (float) Math.toDegrees(Math.atan2(dz, dx)) - 90.0f;
         applyWASDKeys(client, moveYaw);
@@ -326,7 +184,16 @@ public class CombatMacro {
         double dist = Math.sqrt(dx * dx + dz * dz);
 
         float targetYaw = (float) Math.toDegrees(Math.atan2(dz, dx)) - 90.0f;
-        float targetPitch = (float) -Math.toDegrees(Math.atan2(dy, dist));
+        float targetPitch;
+        
+        // GIMBAL LOCK PREVENTION & PITCH CLAMP
+        if (dist < 0.3) {
+            targetPitch = client.player.getXRot(); // Mob is inside player, freeze pitch
+        } else {
+            targetPitch = (float) -Math.toDegrees(Math.atan2(dy, dist));
+            // Force camera to never look further down than 35 degrees during combat
+            targetPitch = Math.max(-60.0f, Math.min(35.0f, targetPitch));
+        }
 
         float currentYaw = client.player.getYRot();
         float currentPitch = client.player.getXRot();
@@ -450,7 +317,9 @@ public class CombatMacro {
 
     private boolean hasClearLineOfSight(Minecraft client, Vec3 start, Vec3 end) {
         double dist = start.distanceTo(end);
-        if (dist < 0.5) return true;
+        // CORNER CLIPPING BYPASS: If mob is within 2.5 blocks, assume clear sight to prevent wall-grazing drops
+        if (dist < 2.5) return true; 
+        
         int steps = (int) Math.ceil(dist * 2); 
         double dx = (end.x - start.x) / steps;
         double dy = (end.y - start.y) / steps;
