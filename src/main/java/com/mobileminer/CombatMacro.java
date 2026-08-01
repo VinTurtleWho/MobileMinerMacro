@@ -89,6 +89,7 @@ public class CombatMacro {
         if (client.player == null || client.level == null || !isCombatActive) return;
 
         long currentTime = System.currentTimeMillis();
+        if (client.player.tickCount % 4 == 0) Pathfinder.cacheWorldChunk(client, 12);
 
         double moveDist = client.player.position().distanceToSqr(lastPlayerPos);
         boolean onStairOrSlab = isStandingOnStairOrSlab(client);
@@ -277,6 +278,7 @@ public class CombatMacro {
 
     private void executeAdaptiveAttack(Minecraft client) {
         long currentTime = System.currentTimeMillis();
+        if (client.player.tickCount % 4 == 0) Pathfinder.cacheWorldChunk(client, 12);
         if (currentMobFirstHitTime == 0) currentMobFirstHitTime = currentTime;
         long timeSinceFirstHit = currentTime - currentMobFirstHitTime;
         boolean isBoss = timeSinceFirstHit > 5000; 

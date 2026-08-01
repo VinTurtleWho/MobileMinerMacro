@@ -10,25 +10,24 @@ import java.util.*;
 import java.util.concurrent.CompletableFuture;
 
 public class Pathfinder {
-    private static final Set<BlockPos> SOLID_BLOCK_CACHE = new HashSet<>();
-    private static final Set<BlockPos> PASSABLE_BLOCK_CACHE = new HashSet<>();
+    private static final Set<BlockPos> SOLID_CACHE = new HashSet<>();
+    private static final Set<BlockPos> PASSABLE_CACHE = new HashSet<>();
 
     public static void cacheWorldChunk(Minecraft client, int radius) {
         if (client.player == null || client.level == null) return;
         BlockPos playerPos = client.player.blockPosition();
 
         for (int x = -radius; x <= radius; x++) {
-            for (int y = -5; y <= 5; y++) {
+            for (int y = -4; y <= 5; y++) {
                 for (int z = -radius; z <= radius; z++) {
                     BlockPos p = playerPos.offset(x, y, z);
                     BlockState state = client.level.getBlockState(p);
-
                     if (state.isSolidRender()) {
-                        SOLID_BLOCK_CACHE.add(p.immutable());
-                        PASSABLE_BLOCK_CACHE.remove(p);
+                        SOLID_CACHE.add(p.immutable());
+                        PASSABLE_CACHE.remove(p);
                     } else if (state.isAir() || state.getBlock() instanceof StairBlock || state.getBlock() instanceof SlabBlock) {
-                        PASSABLE_BLOCK_CACHE.add(p.immutable());
-                        SOLID_BLOCK_CACHE.remove(p);
+                        PASSABLE_CACHE.add(p.immutable());
+                        SOLID_CACHE.remove(p);
                     }
                 }
             }
@@ -36,10 +35,7 @@ public class Pathfinder {
     }
 
     public static CompletableFuture<List<BlockPos>> calculatePathAsync(Minecraft client, BlockPos start, BlockPos target) {
-        return CompletableFuture.supplyAsync(() -> {
-            cacheWorldChunk(client, 16);
-            return findPath(client, start, target);
-        });
+        return CompletableFuture.supplyAsync(() -> findPath(client, start, target));
     }
 
     private static List<BlockPos> findPath(Minecraft client, BlockPos start, BlockPos target) {
@@ -67,9 +63,7 @@ public class Pathfinder {
                 return path;
             }
 
-            for (BlockPos neighborPos : getNeighbors(current.pos)) {
-                if (!isWalkable(client, neighborPos)) continue;
-
+            for (BlockPos neighborPos : getValidWalkingNeighbors(client, current.pos)) {
                 double gScore = current.gScore + 1.0;
                 Node neighbor = allNodes.get(neighborPos);
 
@@ -89,36 +83,38 @@ public class Pathfinder {
         return null;
     }
 
-    private static boolean isWalkable(Minecraft client, BlockPos pos) {
-        boolean feetPassable = PASSABLE_BLOCK_CACHE.contains(pos) || (!SOLID_BLOCK_CACHE.contains(pos) && !client.level.getBlockState(pos).isSolidRender());
-        boolean headPassable = PASSABLE_BLOCK_CACHE.contains(pos.above()) || (!SOLID_BLOCK_CACHE.contains(pos.above()) && !client.level.getBlockState(pos.above()).isSolidRender());
-        boolean groundSolid = SOLID_BLOCK_CACHE.contains(pos.below()) || (!PASSABLE_BLOCK_CACHE.contains(pos.below()) && client.level.getBlockState(pos.below()).isSolidRender());
-
-        return feetPassable && headPassable && groundSolid;
-    }
-
-    private static List<BlockPos> getNeighbors(BlockPos pos) {
+    private static List<BlockPos> getValidWalkingNeighbors(Minecraft client, BlockPos pos) {
         List<BlockPos> neighbors = new ArrayList<>();
-        neighbors.add(pos.north());
-        neighbors.add(pos.south());
-        neighbors.add(pos.east());
-        neighbors.add(pos.west());
-        neighbors.add(pos.above());
-        neighbors.add(pos.below());
+        BlockPos[] dirs = {pos.north(), pos.south(), pos.east(), pos.west()};
+
+        for (BlockPos dir : dirs) {
+            if (isPassable(client, dir) && isPassable(client, dir.above())) {
+                if (isSolid(client, dir.below())) neighbors.add(dir); 
+                else if (isPassable(client, dir.below()) && isSolid(client, dir.below().below())) neighbors.add(dir.below());
+                else if (isPassable(client, dir.below()) && isPassable(client, dir.below().below()) && isSolid(client, dir.below().below().below())) neighbors.add(dir.below().below());
+            }
+            if (isSolid(client, dir) && isPassable(client, dir.above()) && isPassable(client, dir.above().above()) && isPassable(client, pos.above().above())) {
+                neighbors.add(dir.above()); 
+            }
+        }
         return neighbors;
     }
 
-    private static class Node {
-        BlockPos pos;
-        Node parent;
-        double gScore;
-        double fScore;
+    private static boolean isSolid(Minecraft client, BlockPos pos) {
+        if (SOLID_CACHE.contains(pos)) return true;
+        if (PASSABLE_CACHE.contains(pos)) return false;
+        try { return client.level.getBlockState(pos).isSolidRender(); } 
+        catch (Exception e) { return false; }
+    }
 
+    private static boolean isPassable(Minecraft client, BlockPos pos) {
+        return !isSolid(client, pos);
+    }
+
+    private static class Node {
+        BlockPos pos; Node parent; double gScore, fScore;
         Node(BlockPos pos, Node parent, double gScore, double fScore) {
-            this.pos = pos;
-            this.parent = parent;
-            this.gScore = gScore;
-            this.fScore = fScore;
+            this.pos = pos; this.parent = parent; this.gScore = gScore; this.fScore = fScore;
         }
     }
 }
