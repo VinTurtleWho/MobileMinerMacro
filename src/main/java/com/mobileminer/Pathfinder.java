@@ -24,7 +24,7 @@ public class Pathfinder {
         Node startNode = new Node(start, null, 0, getDistance(start, target));
         openSet.add(startNode);
         
-        int maxIterations = 3000; // Hard-limit so it never crashes your phone
+        int maxIterations = 30000; // Hard-limit so it never crashes your phone
         int iterations = 0;
 
         while (!openSet.isEmpty() && iterations < maxIterations) {

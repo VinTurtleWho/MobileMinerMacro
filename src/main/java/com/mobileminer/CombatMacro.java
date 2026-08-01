@@ -29,6 +29,7 @@ public class CombatMacro {
     private long nextClickTime = 0;
     private long burstCooldownEndTime = 0;
     private int burstClicksRemaining = 0;
+    private boolean announcedBossMode = false;
     private final Random random = new Random();
 
     private long lastTargetScanTime = 0;
@@ -58,6 +59,7 @@ public class CombatMacro {
         targetMobs.clear();
         currentMob = null;
         currentPath = null;
+        announcedBossMode = false;
         deadEntityBlacklist.clear();
         unreachableEntityBlacklist.clear();
     }
@@ -73,6 +75,7 @@ public class CombatMacro {
             currentPath = null;
             currentMobFirstHitTime = 0;
             burstClicksRemaining = 0;
+            announcedBossMode = false;
             pathFailed = false;
             deadEntityBlacklist.clear();
             unreachableEntityBlacklist.clear();
@@ -111,6 +114,7 @@ public class CombatMacro {
             }
             currentMob = null;
             currentPath = null;
+            announcedBossMode = false;
             pathFailed = false;
             stopMovement(client);
         }
@@ -126,12 +130,14 @@ public class CombatMacro {
                 currentMob = bestMob;
                 currentPath = null;
                 currentMobFirstHitTime = 0; 
+                announcedBossMode = false;
                 
                 targetOffsetX = (random.nextDouble() - 0.5) * 0.08;
                 targetOffsetY = (random.nextDouble() - 0.5) * 0.08;
                 targetOffsetZ = (random.nextDouble() - 0.5) * 0.08;
             } else if (bestMob == null) {
                 currentMob = null;
+                announcedBossMode = false;
             }
             
             lastTargetScanTime = currentTime;
@@ -139,12 +145,14 @@ public class CombatMacro {
 
         if (currentMob == null) {
             stopMovement(client);
+            announcedBossMode = false;
             return;
         }
 
         Entity actualTarget = getRealFleshEntity(client, currentMob);
         if (actualTarget == null) {
             currentMob = null; 
+            announcedBossMode = false;
             return; 
         }
 
@@ -152,6 +160,7 @@ public class CombatMacro {
             LivingEntity le = (LivingEntity) actualTarget;
             if (le.getHealth() <= 0 || le.isDeadOrDying() || le.deathTime > 0) {
                 currentMob = null;
+                announcedBossMode = false;
                 stopMovement(client);
                 return;
             }
@@ -294,6 +303,10 @@ public class CombatMacro {
                 nextClickTime = currentTime + 350 + random.nextInt(80); 
             }
         } else {
+            if (!announcedBossMode) {
+                sendMessage(client, "§e[MobileMiner] Target is tanky! Engaging Burst Mode (5-8 CPS).");
+                announcedBossMode = true;
+            }
             if (burstClicksRemaining > 0) {
                 if (currentTime >= nextClickTime) {
                     injectHardwareClick(client);
@@ -411,7 +424,6 @@ public class CombatMacro {
                 if (e instanceof LivingEntity && !e.getClass().getSimpleName().contains("ArmorStand")) {
                     LivingEntity living = (LivingEntity) e;
                     if (living.getHealth() > 0 && !living.isDeadOrDying() && living.deathTime == 0) {
-                        // THE PROXIMITY MATH FIX: Find the exact entity perfectly stacked on the hologram
                         double dist = e.distanceToSqr(scannedEntity);
                         if (dist < closestDist) {
                             closestDist = dist;
@@ -491,7 +503,7 @@ public class CombatMacro {
     }
 
     private boolean isTargetValid(Entity entity, Minecraft client) {
-        if (entity.isRemoved()) return false; // Reverted the bad Player filter here!
+        if (entity.isRemoved()) return false;
         
         int id = entity.getId();
         
