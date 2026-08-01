@@ -10,7 +10,6 @@ import java.util.*;
 import java.util.concurrent.CompletableFuture;
 
 public class Pathfinder {
-    // Dynamic Island-Agnostic Map Memory Cache
     private static final Set<BlockPos> SOLID_BLOCK_CACHE = new HashSet<>();
     private static final Set<BlockPos> PASSABLE_BLOCK_CACHE = new HashSet<>();
 
@@ -38,7 +37,7 @@ public class Pathfinder {
 
     public static CompletableFuture<List<BlockPos>> calculatePathAsync(Minecraft client, BlockPos start, BlockPos target) {
         return CompletableFuture.supplyAsync(() -> {
-            cacheWorldChunk(client, 16); // Cache 16-block radius every path calculation
+            cacheWorldChunk(client, 16);
             return findPath(client, start, target);
         });
     }
