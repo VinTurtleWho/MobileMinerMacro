@@ -2,139 +2,124 @@ package com.mobileminer;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.block.StairBlock;
+import net.minecraft.world.level.block.SlabBlock;
 import net.minecraft.world.level.block.state.BlockState;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 
 public class Pathfinder {
+    // Dynamic Island-Agnostic Map Memory Cache
+    private static final Set<BlockPos> SOLID_BLOCK_CACHE = new HashSet<>();
+    private static final Set<BlockPos> PASSABLE_BLOCK_CACHE = new HashSet<>();
 
-    // 1. ASYNC THREAD GENERATOR (Prevents Pojav from lagging)
+    public static void cacheWorldChunk(Minecraft client, int radius) {
+        if (client.player == null || client.level == null) return;
+        BlockPos playerPos = client.player.blockPosition();
+
+        for (int x = -radius; x <= radius; x++) {
+            for (int y = -5; y <= 5; y++) {
+                for (int z = -radius; z <= radius; z++) {
+                    BlockPos p = playerPos.offset(x, y, z);
+                    BlockState state = client.level.getBlockState(p);
+
+                    if (state.isSolidRender()) {
+                        SOLID_BLOCK_CACHE.add(p.immutable());
+                        PASSABLE_BLOCK_CACHE.remove(p);
+                    } else if (state.isAir() || state.getBlock() instanceof StairBlock || state.getBlock() instanceof SlabBlock) {
+                        PASSABLE_BLOCK_CACHE.add(p.immutable());
+                        SOLID_BLOCK_CACHE.remove(p);
+                    }
+                }
+            }
+        }
+    }
+
     public static CompletableFuture<List<BlockPos>> calculatePathAsync(Minecraft client, BlockPos start, BlockPos target) {
         return CompletableFuture.supplyAsync(() -> {
+            cacheWorldChunk(client, 16); // Cache 16-block radius every path calculation
             return findPath(client, start, target);
         });
     }
 
-    // 2. THE A* MATH ENGINE
     private static List<BlockPos> findPath(Minecraft client, BlockPos start, BlockPos target) {
-        PriorityQueue<Node> openSet = new PriorityQueue<>(Comparator.comparingDouble(Node::getFCost));
-        HashSet<BlockPos> closedSet = new HashSet<>();
-        
-        Node startNode = new Node(start, null, 0, getDistance(start, target));
+        PriorityQueue<Node> openSet = new PriorityQueue<>(Comparator.comparingDouble(n -> n.fScore));
+        Map<BlockPos, Node> allNodes = new HashMap<>();
+
+        Node startNode = new Node(start, null, 0, start.distSqr(target));
         openSet.add(startNode);
-        
-        int maxIterations = 30000; // Hard-limit so it never crashes your phone
-        int iterations = 0;
+        allNodes.put(start, startNode);
 
-        while (!openSet.isEmpty() && iterations < maxIterations) {
-            iterations++;
+        int nodesSearched = 0;
+        int maxNodes = 30000; 
+
+        while (!openSet.isEmpty() && nodesSearched < maxNodes) {
             Node current = openSet.poll();
-            
-            // If we are within 2 blocks of the mob, the path is complete!
+            nodesSearched++;
+
             if (current.pos.closerThan(target, 2.0)) {
-                return retracePath(startNode, current);
+                List<BlockPos> path = new ArrayList<>();
+                Node curr = current;
+                while (curr != null) {
+                    path.add(0, curr.pos);
+                    curr = curr.parent;
+                }
+                return path;
             }
-            
-            closedSet.add(current.pos);
-            
-            // Scan surrounding blocks (North, South, East, West)
-            for (BlockPos neighborPos : getNeighbors(client, current.pos)) {
-                if (closedSet.contains(neighborPos)) continue;
-                
-                double tentativeGCost = current.gCost + getDistance(current.pos, neighborPos);
-                Node neighborNode = new Node(neighborPos, current, tentativeGCost, getDistance(neighborPos, target));
-                
-                boolean inOpenSet = false;
-                for (Node n : openSet) {
-                    if (n.pos.equals(neighborPos) && n.gCost <= tentativeGCost) {
-                        inOpenSet = true;
-                        break;
+
+            for (BlockPos neighborPos : getNeighbors(current.pos)) {
+                if (!isWalkable(client, neighborPos)) continue;
+
+                double gScore = current.gScore + 1.0;
+                Node neighbor = allNodes.get(neighborPos);
+
+                if (neighbor == null || gScore < neighbor.gScore) {
+                    if (neighbor == null) {
+                        neighbor = new Node(neighborPos, current, gScore, gScore + neighborPos.distSqr(target));
+                        allNodes.put(neighborPos, neighbor);
+                    } else {
+                        neighbor.parent = current;
+                        neighbor.gScore = gScore;
+                        neighbor.fScore = gScore + neighborPos.distSqr(target);
                     }
-                }
-                
-                if (!inOpenSet) {
-                    openSet.add(neighborNode);
+                    openSet.add(neighbor);
                 }
             }
         }
-        return null; // No path found (Trapped in a box or mob is unreachable)
+        return null;
     }
 
-    // 3. THE BREADCRUMB TRAIL MAKER
-    private static List<BlockPos> retracePath(Node startNode, Node endNode) {
-        List<BlockPos> path = new ArrayList<>();
-        Node current = endNode;
-        while (current != startNode) {
-            path.add(current.pos);
-            current = current.parent;
-        }
-        Collections.reverse(path);
-        return path;
+    private static boolean isWalkable(Minecraft client, BlockPos pos) {
+        boolean feetPassable = PASSABLE_BLOCK_CACHE.contains(pos) || (!SOLID_BLOCK_CACHE.contains(pos) && !client.level.getBlockState(pos).isSolidRender());
+        boolean headPassable = PASSABLE_BLOCK_CACHE.contains(pos.above()) || (!SOLID_BLOCK_CACHE.contains(pos.above()) && !client.level.getBlockState(pos.above()).isSolidRender());
+        boolean groundSolid = SOLID_BLOCK_CACHE.contains(pos.below()) || (!PASSABLE_BLOCK_CACHE.contains(pos.below()) && client.level.getBlockState(pos.below()).isSolidRender());
+
+        return feetPassable && headPassable && groundSolid;
     }
 
-    // 4. MINECRAFT PHYSICS SIMULATOR
-    private static List<BlockPos> getNeighbors(Minecraft client, BlockPos pos) {
+    private static List<BlockPos> getNeighbors(BlockPos pos) {
         List<BlockPos> neighbors = new ArrayList<>();
-        int[][] directions = {{1,0}, {-1,0}, {0,1}, {0,-1}};
-        
-        for (int[] dir : directions) {
-            int dx = dir[0];
-            int dz = dir[1];
-            
-            // Check flat walking
-            BlockPos next = pos.offset(dx, 0, dz);
-            if (isSafe(client, next)) {
-                neighbors.add(next);
-                continue; 
-            }
-            
-            // Check jumping (up 1 block)
-            BlockPos jump = pos.offset(dx, 1, dz);
-            if (isSafe(client, jump) && isPassable(client, pos.above(2))) { // Ensure we don't hit our head
-                neighbors.add(jump);
-            }
-            
-            // Check dropping (down 1 block)
-            BlockPos fall = pos.offset(dx, -1, dz);
-            if (isSafe(client, fall) && isPassable(client, next)) {
-                neighbors.add(fall);
-            }
-        }
+        neighbors.add(pos.north());
+        neighbors.add(pos.south());
+        neighbors.add(pos.east());
+        neighbors.add(pos.west());
+        neighbors.add(pos.above());
+        neighbors.add(pos.below());
         return neighbors;
     }
 
-    // Safely check if a block is walkable
-    private static boolean isSafe(Minecraft client, BlockPos pos) {
-        return isPassable(client, pos) && isPassable(client, pos.above()) && !isPassable(client, pos.below());
-    }
-
-    private static boolean isPassable(Minecraft client, BlockPos pos) {
-        try {
-            if (client.level == null) return false;
-            BlockState state = client.level.getBlockState(pos);
-            return state.getCollisionShape(client.level, pos).isEmpty(); 
-        } catch (Exception e) {
-            return false;
-        }
-    }
-
-    private static double getDistance(BlockPos a, BlockPos b) {
-        return Math.sqrt(a.distSqr(b));
-    }
-
-    // 5. INTERNAL NODE DATA
     private static class Node {
         BlockPos pos;
         Node parent;
-        double gCost, hCost;
+        double gScore;
+        double fScore;
 
-        Node(BlockPos pos, Node parent, double gCost, double hCost) {
+        Node(BlockPos pos, Node parent, double gScore, double fScore) {
             this.pos = pos;
             this.parent = parent;
-            this.gCost = gCost;
-            this.hCost = hCost;
+            this.gScore = gScore;
+            this.fScore = fScore;
         }
-        double getFCost() { return gCost + hCost; }
     }
 }
