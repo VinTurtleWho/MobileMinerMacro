@@ -407,7 +407,7 @@ public class CombatMacro {
     private Entity getRealFleshEntity(Minecraft client, Entity scannedEntity) {
         if (scannedEntity.getClass().getSimpleName().contains("ArmorStand")) {
             for (Entity e : client.level.getEntities(scannedEntity, scannedEntity.getBoundingBox().inflate(1.5))) {
-                if (e instanceof LivingEntity && !e.getClass().getSimpleName().contains("ArmorStand")) {
+                if (e instanceof LivingEntity && !(e instanceof net.minecraft.world.entity.player.Player) && !e.getClass().getSimpleName().contains("ArmorStand")) {
                     LivingEntity living = (LivingEntity) e;
                     if (living.getHealth() > 0 && !living.isDeadOrDying() && living.deathTime == 0) {
                         return e; 
@@ -486,7 +486,7 @@ public class CombatMacro {
     }
 
     private boolean isTargetValid(Entity entity, Minecraft client) {
-        if (entity.isRemoved()) return false;
+        if (entity.isRemoved() || entity instanceof net.minecraft.world.entity.player.Player) return false;
         
         int id = entity.getId();
         
