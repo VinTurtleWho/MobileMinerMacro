@@ -127,7 +127,6 @@ public class CombatMacro {
                 currentPath = null;
                 currentMobFirstHitTime = 0; 
                 
-                // Tightened offsets so crosshair stays directly on center-mass
                 targetOffsetX = (random.nextDouble() - 0.5) * 0.08;
                 targetOffsetY = (random.nextDouble() - 0.5) * 0.08;
                 targetOffsetZ = (random.nextDouble() - 0.5) * 0.08;
@@ -158,7 +157,7 @@ public class CombatMacro {
             BlockPos nextWaypoint = currentPath.get(0);
             double targetX = nextWaypoint.getX() + 0.5;
             double targetZ = nextWaypoint.getZ() + 0.5;
-            double targetY = nextWaypoint.getY() + 1.62; // Aligned with eye-level to stop floor staring
+            double targetY = nextWaypoint.getY() + 1.62; 
             
             double dx = targetX - client.player.getX();
             double dy = targetY - client.player.getEyePosition().y;
@@ -168,7 +167,6 @@ public class CombatMacro {
             float pathYaw = (float) Math.toDegrees(Math.atan2(dz, dx)) - 90.0f;
             float pathPitch = (float) -Math.toDegrees(Math.atan2(dy, dist));
 
-            // Clamp pitch to horizon (-15 to +15 deg) so player eyes stay up
             pathPitch = Math.max(-15.0f, Math.min(15.0f, pathPitch));
 
             humanizedLookTowards(client, pathYaw, pathPitch);
@@ -339,7 +337,6 @@ public class CombatMacro {
 
         float pitchDiff = targetPitch - currentPitch;
 
-        // Reduced deadzone from 12.0 to 2.5 so crosshair stays locked on body
         if (Math.abs(yawDiff) < 2.5f && Math.abs(pitchDiff) < 2.5f) {
             return; 
         }
@@ -461,8 +458,7 @@ public class CombatMacro {
 
         for (int i = 1; i < steps; i++) {
             BlockPos pos = new BlockPos((int)(start.x + dx * i), (int)(start.y + dy * i), (int)(start.z + dz * i));
-            // Only block vision if it is a solid collidable block
-            if (client.level.getBlockState(pos).isSolidRender(client.level, pos)) { 
+            if (client.level.getBlockState(pos).isSolidRender()) { 
                 return false; 
             }
         }
