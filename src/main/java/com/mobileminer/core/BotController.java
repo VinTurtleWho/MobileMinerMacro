@@ -21,6 +21,14 @@ public class BotController {
         this.taskPlanner = new TaskPlanner();
     }
 
+    public BotContext getContext() {
+        return context;
+    }
+
+    public WorldSnapshot getLatestWorldSnapshot(Minecraft client) {
+        return worldObserver.getSnapshot(client, "diamond_ore", 5);
+    }
+
     public void onTick(Minecraft client) {
         if (client.player == null || client.level == null) return;
 
