@@ -2,8 +2,11 @@ package com.mobileminer.core;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
+import net.minecraft.world.phys.Vec3;
 import com.mobileminer.perception.*;
 import com.mobileminer.planning.TaskPlanner;
+import com.mobileminer.control.AimCalculator;
+import com.mobileminer.control.DesiredRotation;
 
 public class BotController {
     private final BotContext context;
@@ -21,21 +24,38 @@ public class BotController {
     public void onTick(Minecraft client) {
         if (client.player == null || client.level == null) return;
 
-        // 1. Perception Layer
+        // 1. Perception
         PlayerSnapshot pSnap = playerObserver.getSnapshot(client);
         WorldSnapshot wSnap = worldObserver.getSnapshot(client, "diamond_ore", 5);
         
-        // 2. Planning Layer (Zero action inputs executed)
+        // 2. Planning
         taskPlanner.evaluate(context, pSnap, wSnap);
 
-        // 3. Debug Output (Print state decisions every 10 ticks)
+        // 3. Aim Calculation Debug (Runs ONLY when in AIMING phase)
+        DesiredRotation desired = null;
+        float deltaYaw = 0.0f;
+        float deltaPitch = 0.0f;
+
+        if (context.getPhase() == BotPhase.AIMING && wSnap.closestTarget != null) {
+            Vec3 eyePos = client.player.getEyePosition();
+            Vec3 blockCenter = Vec3.atCenterOf(wSnap.closestTarget.pos);
+            
+            desired = AimCalculator.calculate(eyePos, blockCenter);
+            deltaYaw = AimCalculator.getAngleDifference(pSnap.yaw, desired.yaw);
+            deltaPitch = AimCalculator.getAngleDifference(pSnap.pitch, desired.pitch);
+        }
+
+        // 4. Debug Output (Every 10 ticks)
         if (pSnap != null && pSnap.tick % 10 == 0) {
             String stateTxt = String.format("§e[%s-%s]", context.getTask(), context.getPhase());
-            String targetState = (wSnap.closestTarget != null) 
-                ? String.format("§bTarget: %.1fm", wSnap.closestTarget.distance) 
-                : "§8No Target";
             
-            String debugTxt = String.format("%s | %s", stateTxt, targetState);
+            String aimTxt = "§8No Target";
+            if (desired != null) {
+                aimTxt = String.format("§bTgt:[%.0f, %.0f] §aΔ:[%.0f, %.0f]", 
+                    desired.yaw, desired.pitch, deltaYaw, deltaPitch);
+            }
+
+            String debugTxt = String.format("%s | %s", stateTxt, aimTxt);
             client.player.sendOverlayMessage(Component.literal(debugTxt));
         }
     }
